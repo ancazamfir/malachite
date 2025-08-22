@@ -1108,10 +1108,6 @@ where
             }
 
             Effect::VerifyVoteExtension(height, round, value_id, signed_extension, pk, r) => {
-                if !is_active_validator {
-                    return Ok(r.resume_with(Ok(())));
-                }
-
                 let valid = self
                     .signing_provider
                     .verify_signed_vote_extension(
