@@ -230,59 +230,56 @@ where
                 "Proposing value"
             );
 
-            // Only sign and publish if we're in the validator set
-            if state.is_validator() {
-                let signed_proposal = sign_proposal(co, proposal.clone()).await?;
+            let signed_proposal = sign_proposal(co, proposal.clone()).await?;
 
-                if signed_proposal.pol_round().is_defined() {
-                    perform!(
-                        co,
-                        Effect::RestreamProposal(
-                            signed_proposal.height(),
-                            signed_proposal.round(),
-                            signed_proposal.pol_round(),
-                            signed_proposal.validator_address().clone(),
-                            signed_proposal.value().id(),
-                            Default::default()
-                        )
-                    );
-                }
+            if signed_proposal.pol_round().is_defined() {
+                perform!(
+                    co,
+                    Effect::RestreamProposal(
+                        signed_proposal.height(),
+                        signed_proposal.round(),
+                        signed_proposal.pol_round(),
+                        signed_proposal.validator_address().clone(),
+                        signed_proposal.value().id(),
+                        Default::default()
+                    )
+                );
+            }
 
-                on_proposal(co, state, metrics, signed_proposal.clone()).await?;
+            on_proposal(co, state, metrics, signed_proposal.clone()).await?;
 
-                // Proposal messages should not be broadcasted if they are implicit,
-                // instead they should be inferred from the block parts.
-                if state.params.value_payload.include_proposal() {
-                    perform!(
-                        co,
-                        Effect::PublishConsensusMsg(
-                            SignedConsensusMsg::Proposal(signed_proposal),
-                            Default::default()
-                        )
+            // Proposal messages should not be broadcasted if they are implicit,
+            // instead they should be inferred from the block parts.
+            if state.params.value_payload.include_proposal() {
+                perform!(
+                    co,
+                    Effect::PublishConsensusMsg(
+                        SignedConsensusMsg::Proposal(signed_proposal),
+                        Default::default()
+                    )
+                );
+            };
+
+            // Publishing the polka certificate of the re-proposed value
+            // ensures all validators receive it, which is necessary for
+            // them to accept the re-proposed value.
+            if proposal.pol_round().is_defined() {
+                // Broadcast the polka certificate at pol_round
+                let Some(polka_certificate) =
+                    state.polka_certificate_at_round(proposal.pol_round())
+                else {
+                    panic!(
+                        "Missing polka certificate for pol_round {}",
+                        proposal.pol_round()
                     );
                 };
-
-                // Publishing the polka certificate of the re-proposed value
-                // ensures all validators receive it, which is necessary for
-                // them to accept the re-proposed value.
-                if proposal.pol_round().is_defined() {
-                    // Broadcast the polka certificate at pol_round
-                    let Some(polka_certificate) =
-                        state.polka_certificate_at_round(proposal.pol_round())
-                    else {
-                        panic!(
-                            "Missing polka certificate for pol_round {}",
-                            proposal.pol_round()
-                        );
-                    };
-                    perform!(
-                        co,
-                        Effect::PublishLivenessMsg(
-                            LivenessMsg::PolkaCertificate(polka_certificate),
-                            Default::default()
-                        )
-                    );
-                }
+                perform!(
+                    co,
+                    Effect::PublishLivenessMsg(
+                        LivenessMsg::PolkaCertificate(polka_certificate),
+                        Default::default()
+                    )
+                );
             }
 
             Ok(())
@@ -355,33 +352,31 @@ where
                 }
             }
 
-            if state.is_validator() {
-                info!(
-                    vote_type = ?vote.vote_type(),
-                    value = %PrettyVal(vote.value().as_ref()),
-                    round = %vote.round(),
-                    "Voting",
-                );
+            info!(
+                vote_type = ?vote.vote_type(),
+                value = %PrettyVal(vote.value().as_ref()),
+                round = %vote.round(),
+                "Voting",
+            );
 
-                let extended_vote = extend_vote(co, vote).await?;
-                let signed_vote = sign_vote(co, extended_vote).await?;
+            let extended_vote = extend_vote(co, vote).await?;
+            let signed_vote = sign_vote(co, extended_vote).await?;
 
-                on_vote(co, state, metrics, signed_vote.clone()).await?;
+            on_vote(co, state, metrics, signed_vote.clone()).await?;
 
-                perform!(
-                    co,
-                    Effect::PublishConsensusMsg(
-                        SignedConsensusMsg::Vote(signed_vote.clone()),
-                        Default::default()
-                    )
-                );
+            perform!(
+                co,
+                Effect::PublishConsensusMsg(
+                    SignedConsensusMsg::Vote(signed_vote.clone()),
+                    Default::default()
+                )
+            );
 
-                state.set_last_vote(signed_vote);
+            state.set_last_vote(signed_vote);
 
-                // Schedule rebroadcast timer
-                let timeout = Timeout::rebroadcast(state.driver.round());
-                perform!(co, Effect::ScheduleTimeout(timeout, Default::default()));
-            }
+            // Schedule rebroadcast timer
+            let timeout = Timeout::rebroadcast(state.driver.round());
+            perform!(co, Effect::ScheduleTimeout(timeout, Default::default()));
 
             Ok(())
         }
