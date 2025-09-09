@@ -9,7 +9,7 @@ use malachitebft_app_channel::app::engine::host::Next;
 use malachitebft_app_channel::app::streaming::StreamContent;
 use malachitebft_app_channel::app::types::core::{Height as _, Round, Validity};
 use malachitebft_app_channel::app::types::sync::RawDecidedValue;
-use malachitebft_app_channel::app::types::{LocallyProposedValue, ProposedValue};
+use malachitebft_app_channel::app::types::ProposedValue;
 use malachitebft_app_channel::{AppMsg, Channels, ConsensusRequest, NetworkMsg};
 use malachitebft_test::{Height, TestContext};
 
@@ -359,6 +359,7 @@ pub async fn run(state: &mut State, channels: &mut Channels<TestContext>) -> eyr
                 }
             }
 
+            // Request to re-stream a proposal that was previously seen at valid_round or round (if valid_round is Nil).
             AppMsg::RestreamProposal {
                 height,
                 round,
@@ -366,34 +367,52 @@ pub async fn run(state: &mut State, channels: &mut Channels<TestContext>) -> eyr
                 address: _,
                 value_id,
             } => {
-                //  Look for a proposal at valid_round or round(should be already stored)
-                let proposal_round = if valid_round == Round::Nil {
-                    round
-                } else {
-                    valid_round
-                };
-                info!(%height, %proposal_round, "Restreaming existing propos*al...");
+                info!(%height, %round, %valid_round, %value_id, "♻️ Request to restream proposal");
 
-                let proposal = state
+                // Look for a proposal to restream, checking valid_round first, then round
+                // First, handle the case where we need to update and store a block from valid_round
+                if valid_round != Round::Nil {
+                    if let Some(mut proposed_value) = state
+                        .store
+                        .get_undecided_proposal(height, valid_round, value_id)
+                        .await?
+                    {
+                        // Update the block for the new round and store it
+                        proposed_value.round = round;
+                        proposed_value.valid_round = valid_round;
+                        state.store.store_undecided_proposal(proposed_value).await?;
+                    }
+                }
+
+                // Then fetch the block we want to stream (either the original or the updated one)
+                let proposed_value_to_restream = state
                     .store
-                    .get_undecided_proposal(height, proposal_round, value_id)
+                    .get_undecided_proposal(height, round, value_id)
                     .await?;
 
-                if let Some(proposal) = proposal {
-                    let locally_proposed_value = LocallyProposedValue {
-                        height,
-                        round,
-                        value: proposal.value,
-                    };
+                match proposed_value_to_restream {
+                    Some(proposed_value) => {
+                        info!(%height, %round, %valid_round, "Restreaming proposal");
+                        let stream_messages = state.restream_proposal(proposed_value);
 
-                    for stream_message in state.stream_proposal(locally_proposed_value, valid_round)
-                    {
-                        info!(%height, %valid_round, "Publishing proposal part: {stream_message:?}");
+                        for stream_message in stream_messages {
+                            channels
+                                .network
+                                .send(NetworkMsg::PublishProposalPart(stream_message))
+                                .await?;
+                        }
+                    }
+                    None => {
+                        let target_round = if valid_round != Round::Nil {
+                            valid_round
+                        } else {
+                            round
+                        };
 
-                        channels
-                            .network
-                            .send(NetworkMsg::PublishProposalPart(stream_message))
-                            .await?;
+                        panic!(
+                            "no block found for restreaming at height={}, target_round={}",
+                            height, target_round
+                        );
                     }
                 }
             }

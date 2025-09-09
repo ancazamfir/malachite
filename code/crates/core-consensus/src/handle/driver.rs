@@ -303,6 +303,26 @@ where
             // Importantly, this mechanism does not need to be enabled from round 0,
             // as it is expensive; it can be activated from any round as a last-resort
             // backup to guarantee liveness.
+
+            // Temp test code to precommit nil for round 0 and 1 of height 10
+            let vote = if let (VoteType::Precommit, NilOrVal::Val(_value_id)) =
+                (vote.vote_type(), vote.value())
+            {
+                let height = vote.height();
+                let round = vote.round();
+                let address = vote.validator_address().clone();
+
+                if height.as_u64() == 10 && (round == Round::new(0)) {
+                    state
+                        .ctx
+                        .new_precommit(height, round, NilOrVal::Nil, address)
+                } else {
+                    vote
+                }
+            } else {
+                vote
+            };
+
             if let (VoteType::Precommit, NilOrVal::Val(value_id)) = (vote.vote_type(), vote.value())
             {
                 // Prune all votes and certificates for the previous rounds as we know we are not going to use them anymore.

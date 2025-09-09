@@ -142,6 +142,12 @@ impl State {
         let height = parts.height;
         let round = parts.round;
 
+        debug!(
+            height = %height,
+            round = %round,
+            "XXX Validating proposal parts"
+        );
+
         // Get the expected proposer for this height and round
         let validator_set = self.get_validator_set(height);
         let expected_proposer = self
@@ -283,6 +289,15 @@ impl State {
 
         // Store extensions for use at next height if we are the proposer
         self.vote_extensions.insert(height.increment(), extensions);
+
+        let proposal_at_round = self
+            .store
+            .get_undecided_proposal(height, round, value_id)
+            .await?;
+        assert!(
+            proposal_at_round.is_some(),
+            "There should be a proposal at the given round"
+        );
 
         // Get the first proposal with the given value id. There may be multiple identical ones
         // if peers have restreamed at different rounds.
@@ -440,6 +455,33 @@ impl State {
         msgs.into_iter()
     }
 
+    /// Creates a stream message for restreaming an existing proposal.
+    /// Similar to stream_proposal but for ProposedValue instead of LocallyProposedValue.
+    pub fn restream_proposal(
+        &mut self,
+        value: ProposedValue<TestContext>,
+    ) -> impl Iterator<Item = StreamMessage<ProposalPart>> {
+        let parts = self.proposed_value_to_parts(value);
+        let stream_id = self.stream_id();
+
+        let mut msgs = Vec::with_capacity(parts.len() + 1);
+        let mut sequence = 0;
+
+        for part in parts {
+            let msg = StreamMessage::new(stream_id.clone(), sequence, StreamContent::Data(part));
+            sequence += 1;
+            msgs.push(msg);
+        }
+
+        msgs.push(StreamMessage::new(
+            stream_id.clone(),
+            sequence,
+            StreamContent::Fin,
+        ));
+
+        msgs.into_iter()
+    }
+
     fn stream_id(&self) -> StreamId {
         let mut bytes = Vec::with_capacity(size_of::<u64>() + size_of::<u32>());
         bytes.extend_from_slice(&self.current_height.as_u64().to_be_bytes());
@@ -490,12 +532,56 @@ impl State {
         parts
     }
 
+    fn proposed_value_to_parts(&self, value: ProposedValue<TestContext>) -> Vec<ProposalPart> {
+        let mut hasher = sha3::Keccak256::new();
+        let mut parts = Vec::new();
+
+        // Init
+        // Include metadata about the proposal
+        {
+            parts.push(ProposalPart::Init(ProposalInit::new(
+                value.height,
+                value.round,
+                value.valid_round,
+                // XXX This is the wrong proposer according to the validation
+                //value.proposer,
+                // XXX This is the correct proposer according to the validation
+                // But if in validate we have a signature in Fin, this is from the original proposer at valid_round
+                self.address,
+            )));
+
+            hasher.update(value.height.as_u64().to_be_bytes().as_slice());
+            hasher.update(value.round.as_i64().to_be_bytes().as_slice());
+        }
+
+        // Data
+        // Include each prime factor of the value as a separate proposal part
+        {
+            for factor in factor_value(value.value) {
+                parts.push(ProposalPart::Data(ProposalData::new(factor)));
+
+                hasher.update(factor.to_be_bytes().as_slice());
+            }
+        }
+
+        // Fin
+        // Sign the hash of the proposal parts
+        {
+            let hash = hasher.finalize().to_vec();
+            // XXX The signature has to be stored in the proposed value to handle the hidden lock case
+            let signature = self.signing_provider.sign(&hash);
+            parts.push(ProposalPart::Fin(ProposalFin::new(signature)));
+        }
+
+        parts
+    }
+
     /// Returns the validator set for the given height.
     /// The validator set is rotated based on the height, selecting floor((n+1)/2)
     /// validators from the genesis validator set.
     pub fn get_validator_set(&self, height: Height) -> ValidatorSet {
         let num_validators = self.genesis.validator_set.len();
-        let selection_size = num_validators.div_ceil(2);
+        let selection_size = num_validators.div_ceil(1);
 
         if num_validators <= selection_size {
             return self.genesis.validator_set.clone();
@@ -527,13 +613,20 @@ impl State {
             .filter_map(|part| part.as_data())
             .fold(1, |acc, data| acc * data.factor);
 
+        // XXX Temp test code to check hidden lock
+        let validity = if parts.height == Height::new(11) && parts.round < Round::new(5) {
+            Validity::Invalid
+        } else {
+            Validity::Valid
+        };
+
         Ok(ProposedValue {
             height: parts.height,
             round: parts.round,
             valid_round: init.pol_round,
             proposer: parts.proposer,
             value: Value::new(value),
-            validity: Validity::Valid,
+            validity,
         })
     }
 }
