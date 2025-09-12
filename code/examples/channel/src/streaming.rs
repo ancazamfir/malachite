@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BinaryHeap, HashSet};
 use malachitebft_app_channel::app::streaming::{Sequence, StreamId, StreamMessage};
 use malachitebft_app_channel::app::types::core::Round;
 use malachitebft_app_channel::app::types::PeerId;
-use malachitebft_test::{Address, Height, ProposalFin, ProposalInit, ProposalPart};
+use malachitebft_test::{Address, Height, ProposalInit, ProposalPart};
 
 struct MinSeq<T>(StreamMessage<T>);
 
@@ -108,10 +108,6 @@ pub struct ProposalParts {
 impl ProposalParts {
     pub fn init(&self) -> Option<&ProposalInit> {
         self.parts.iter().find_map(|p| p.as_init())
-    }
-
-    pub fn fin(&self) -> Option<&ProposalFin> {
-        self.parts.iter().find_map(|p| p.as_fin())
     }
 }
 

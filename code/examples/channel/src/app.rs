@@ -90,30 +90,6 @@ pub async fn run(state: &mut State, channels: &mut Channels<TestContext>) -> eyr
                         .store
                         .remove_pending_proposal_parts(parts.clone())
                         .await?;
-
-                    match state.validate_proposal_parts(parts) {
-                        Ok(()) => {
-                            // Validation passed - convert to ProposedValue and move to undecided
-                            let value = State::assemble_value_from_parts(parts.clone())?;
-                            state.store.store_undecided_proposal(value).await?;
-                            info!(
-                                height = %parts.height,
-                                round = %parts.round,
-                                proposer = %parts.proposer,
-                                "Moved valid pending proposal to undecided after validation"
-                            );
-                        }
-                        Err(error) => {
-                            // Validation failed, log error
-                            error!(
-                                height = %parts.height,
-                                round = %parts.round,
-                                proposer = %parts.proposer,
-                                error = ?error,
-                                "Removed invalid pending proposal"
-                            );
-                        }
-                    }
                 }
 
                 // If we have already built or seen values for this height and round,
