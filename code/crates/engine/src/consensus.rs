@@ -275,6 +275,14 @@ impl<Ctx> Consensus<Ctx>
 where
     Ctx: Context,
 {
+    /// Check if this node is an active validator.
+    ///
+    /// Returns true only if:
+    /// - Consensus is enabled in the configuration, AND
+    /// - This node is present in the current validator set
+    fn is_active_validator(&self, consensus_state: &ConsensusState<Ctx>) -> bool {
+        self.consensus_config.enabled && consensus_state.is_validator()
+    }
     #[allow(clippy::too_many_arguments)]
     pub async fn spawn(
         ctx: Ctx,
@@ -314,6 +322,7 @@ where
         input: ConsensusInput<Ctx>,
     ) -> Result<(), ConsensusError<Ctx>> {
         let height = state.height();
+        let is_active_validator = self.is_active_validator(&state.consensus);
 
         // By the time the effect is processed the state height might have changed.
         // This happens for input Msg::StartHeight(height), so height is potentially stale.
@@ -330,7 +339,7 @@ where
                     timeouts: &mut state.timeouts,
                 };
 
-                self.handle_effect(myself, handler_state, effect).await
+                self.handle_effect(myself, handler_state, effect, is_active_validator).await
             }
         )
     }
@@ -950,6 +959,7 @@ where
         myself: &ActorRef<Msg<Ctx>>,
         state: HandlerState<'_, Ctx>,
         effect: Effect<Ctx>,
+        is_active_validator: bool,
     ) -> Result<Resume<Ctx>, ActorProcessingErr> {
         match effect {
             Effect::ResetTimeouts(r) => {
@@ -1073,6 +1083,10 @@ where
             }
 
             Effect::ExtendVote(height, round, value_id, r) => {
+                if !is_active_validator {
+                    return Ok(r.resume_with(None));
+                }
+
                 if let Some(extension) = self.extend_vote(height, round, value_id).await? {
                     let signed_extension =
                         self.signing_provider.sign_vote_extension(extension).await;
@@ -1104,76 +1118,86 @@ where
             }
 
             Effect::PublishConsensusMsg(msg, r) => {
-                // Sync the WAL to disk before we broadcast the message
-                // NOTE: The message has already been append to the WAL by the `WalAppend` effect.
-                self.wal_flush(state.phase).await?;
+                if is_active_validator {
+                    // Sync the WAL to disk before we broadcast the message
+                    // NOTE: The message has already been append to the WAL by the `WalAppend` effect.
+                    self.wal_flush(state.phase).await?;
 
-                // Notify any subscribers that we are about to publish a message
-                self.tx_event.send(|| Event::Published(msg.clone()));
+                    // Notify any subscribers that we are about to publish a message
+                    self.tx_event.send(|| Event::Published(msg.clone()));
 
-                self.network
-                    .cast(NetworkMsg::PublishConsensusMsg(msg))
-                    .map_err(|e| eyre!("Error when broadcasting consensus message: {e:?}"))?;
+                    self.network
+                        .cast(NetworkMsg::PublishConsensusMsg(msg))
+                        .map_err(|e| eyre!("Error when broadcasting consensus message: {e:?}"))?;
+                }
 
                 Ok(r.resume_with(()))
             }
 
             Effect::PublishLivenessMsg(msg, r) => {
-                match msg {
-                    LivenessMsg::Vote(ref msg) => {
-                        self.tx_event.send(|| Event::RepublishVote(msg.clone()));
+                if is_active_validator {
+                    match msg {
+                        LivenessMsg::Vote(ref msg) => {
+                            self.tx_event.send(|| Event::RepublishVote(msg.clone()));
+                        }
+                        LivenessMsg::PolkaCertificate(ref certificate) => {
+                            self.tx_event
+                                .send(|| Event::PolkaCertificate(certificate.clone()));
+                        }
+                        LivenessMsg::SkipRoundCertificate(ref certificate) => {
+                            self.tx_event
+                                .send(|| Event::SkipRoundCertificate(certificate.clone()));
+                        }
                     }
-                    LivenessMsg::PolkaCertificate(ref certificate) => {
-                        self.tx_event
-                            .send(|| Event::PolkaCertificate(certificate.clone()));
-                    }
-                    LivenessMsg::SkipRoundCertificate(ref certificate) => {
-                        self.tx_event
-                            .send(|| Event::SkipRoundCertificate(certificate.clone()));
-                    }
-                }
 
-                self.network
-                    .cast(NetworkMsg::PublishLivenessMsg(msg))
-                    .map_err(|e| eyre!("Error when broadcasting liveness message: {e:?}"))?;
+                    self.network
+                        .cast(NetworkMsg::PublishLivenessMsg(msg))
+                        .map_err(|e| eyre!("Error when broadcasting liveness message: {e:?}"))?;
+                }
 
                 Ok(r.resume_with(()))
             }
 
             Effect::RepublishVote(msg, r) => {
-                // Notify any subscribers that we are about to rebroadcast a vote
-                self.tx_event.send(|| Event::RepublishVote(msg.clone()));
+                if is_active_validator {
+                    // Notify any subscribers that we are about to rebroadcast a vote
+                    self.tx_event.send(|| Event::RepublishVote(msg.clone()));
 
-                self.network
-                    .cast(NetworkMsg::PublishLivenessMsg(LivenessMsg::Vote(msg)))
-                    .map_err(|e| eyre!("Error when rebroadcasting vote message: {e:?}"))?;
+                    self.network
+                        .cast(NetworkMsg::PublishLivenessMsg(LivenessMsg::Vote(msg)))
+                        .map_err(|e| eyre!("Error when rebroadcasting vote message: {e:?}"))?;
+                }
 
                 Ok(r.resume_with(()))
             }
 
             Effect::RepublishRoundCertificate(certificate, r) => {
-                // Notify any subscribers that we are about to rebroadcast a round certificate
-                self.tx_event
-                    .send(|| Event::RebroadcastRoundCertificate(certificate.clone()));
+                if is_active_validator {
+                    // Notify any subscribers that we are about to rebroadcast a round certificate
+                    self.tx_event
+                        .send(|| Event::RebroadcastRoundCertificate(certificate.clone()));
 
-                self.network
-                    .cast(NetworkMsg::PublishLivenessMsg(
-                        LivenessMsg::SkipRoundCertificate(certificate),
-                    ))
-                    .map_err(|e| {
-                        eyre!("Error when rebroadcasting round certificate message: {e:?}")
-                    })?;
+                    self.network
+                        .cast(NetworkMsg::PublishLivenessMsg(
+                            LivenessMsg::SkipRoundCertificate(certificate),
+                        ))
+                        .map_err(|e| {
+                            eyre!("Error when rebroadcasting round certificate message: {e:?}")
+                        })?;
+                }
 
                 Ok(r.resume_with(()))
             }
 
             Effect::GetValue(height, round, timeout, r) => {
-                let timeout_duration = state.timeouts.duration_for(timeout.kind);
+                if is_active_validator {
+                    let timeout_duration = state.timeouts.duration_for(timeout.kind);
 
-                self.get_value(myself, height, round, timeout_duration)
-                    .map_err(|e| {
-                        eyre!("Error when asking application for value to propose: {e:?}")
-                    })?;
+                    self.get_value(myself, height, round, timeout_duration)
+                        .map_err(|e| {
+                            eyre!("Error when asking application for value to propose: {e:?}")
+                        })?;
+                }
 
                 Ok(r.resume_with(()))
             }
@@ -1191,15 +1215,17 @@ where
             }
 
             Effect::RestreamProposal(height, round, valid_round, address, value_id, r) => {
-                self.host
-                    .cast(HostMsg::RestreamValue {
-                        height,
-                        round,
-                        valid_round,
-                        address,
-                        value_id,
-                    })
-                    .map_err(|e| eyre!("Error when sending decided value to host: {e:?}"))?;
+                if is_active_validator {
+                    self.host
+                        .cast(HostMsg::RestreamValue {
+                            height,
+                            round,
+                            valid_round,
+                            address,
+                            value_id,
+                        })
+                        .map_err(|e| eyre!("Error when sending decided value to host: {e:?}"))?;
+                }
 
                 Ok(r.resume_with(()))
             }
