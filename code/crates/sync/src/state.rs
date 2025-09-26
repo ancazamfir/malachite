@@ -6,7 +6,7 @@ use malachitebft_core_types::{Context, Height};
 use malachitebft_peer::PeerId;
 
 use crate::scoring::{ema, PeerScorer, Strategy};
-use crate::{Config, OutboundRequestId, Status};
+use crate::{Config, OutboundRequestId, PendingRequests, Status};
 
 pub struct State<Ctx>
 where
@@ -28,7 +28,7 @@ where
     pub sync_height: Ctx::Height,
 
     /// The requested range of heights.
-    pub pending_requests: BTreeMap<OutboundRequestId, (RangeInclusive<Ctx::Height>, PeerId)>,
+    pub pending_requests: PendingRequests<Ctx>,
 
     /// The set of peers we are connected to in order to get values, certificates and votes.
     pub peers: BTreeMap<PeerId, Status<Ctx>>,
@@ -53,18 +53,24 @@ where
 
         Self {
             rng,
+            pending_requests: PendingRequests::new(Ctx::Height::ZERO, config.batch_size as u64),
+            peers: BTreeMap::new(),
+            peer_scorer,
             config,
             started: false,
             tip_height: Ctx::Height::ZERO,
             sync_height: Ctx::Height::ZERO,
-            pending_requests: BTreeMap::new(),
-            peers: BTreeMap::new(),
-            peer_scorer,
         }
     }
 
     pub fn update_status(&mut self, status: Status<Ctx>) {
         self.peers.insert(status.peer_id, status);
+    }
+
+    /// Update the sync height and propagate the change to pending requests
+    pub fn update_sync_height(&mut self, new_height: Ctx::Height) {
+        self.sync_height = new_height;
+        self.pending_requests.update_current_height(new_height);
     }
 
     /// Filter peers to only include those that can provide the given range of values, or at least a prefix of the range.
@@ -137,10 +143,7 @@ where
     ///
     /// Assumes a height cannot be in multiple pending requests.
     pub fn get_request_id_by(&self, height: Ctx::Height) -> Option<(OutboundRequestId, PeerId)> {
-        self.pending_requests
-            .iter()
-            .find(|(_, (range, _))| range.contains(&height))
-            .map(|(request_id, (_, stored_peer_id))| (request_id.clone(), *stored_peer_id))
+        self.pending_requests.get_request_id_by(height)
     }
 
     /// Return a new range of heights, trimming from the beginning any height

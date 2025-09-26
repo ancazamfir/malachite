@@ -4,6 +4,9 @@ pub use behaviour::{Behaviour, Event};
 mod metrics;
 pub use metrics::Metrics;
 
+mod pending_requests;
+pub use pending_requests::PendingRequests;
+
 mod state;
 pub use state::State;
 

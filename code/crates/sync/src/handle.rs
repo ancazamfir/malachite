@@ -221,12 +221,12 @@ where
 
     if start_type.is_restart() {
         // Consensus is retrying the height, so we should sync starting from it.
-        state.sync_height = height;
+        state.update_sync_height(height);
         // Clear pending requests, as we are restarting the height.
         state.pending_requests.clear();
     } else {
         // If consensus is voting on a height that is currently being synced from a peer, do not update the sync height.
-        state.sync_height = max(state.sync_height, height);
+        state.update_sync_height(max(state.sync_height, height));
     }
 
     // Trigger potential requests if possible.
@@ -252,7 +252,7 @@ where
 
     // The next height to sync should always be higher than the tip.
     if state.sync_height == state.tip_height {
-        state.sync_height = state.sync_height.increment();
+        state.update_sync_height(state.sync_height.increment());
     }
 
     Ok(())
@@ -497,25 +497,7 @@ where
 
     while (state.pending_requests.len() as u64) < max_parallel_requests {
         // Build the next range of heights to request from a peer.
-        let start_height = state.sync_height;
-        let max_batch_size = max(1, state.config.batch_size as u64);
-
-        // Find the largest (up to max_batch_size) contiguous uncovered range starting from start_height
-        let mut end_height = start_height;
-        for _ in 1..max_batch_size {
-            let next_height = end_height.increment();
-            // Stop if the next height is already covered by a pending request
-            if state
-                .pending_requests
-                .values()
-                .any(|(range, _)| range.contains(&next_height))
-            {
-                break;
-            }
-            end_height = next_height;
-        }
-
-        let range = start_height..=end_height;
+        let range = state.pending_requests.next_uncovered_range();
 
         // Get a random peer that can provide the values in the range.
         let Some((peer, range)) = state.random_peer_with(&range) else {
@@ -573,7 +555,7 @@ where
     // Store the pending request first so we can check against all pending requests
     state
         .pending_requests
-        .insert(request_id, (range.clone(), peer));
+        .insert(request_id, range.clone(), peer);
 
     // Find the next height that's not covered by any pending request
     let mut next_sync_height = max(state.sync_height, range.end().increment());
@@ -584,7 +566,7 @@ where
     {
         next_sync_height = covered_range.end().increment();
     }
-    state.sync_height = next_sync_height;
+    state.update_sync_height(next_sync_height);
 
     Ok(())
 }
@@ -646,7 +628,7 @@ where
             "No peer to request sync from"
         );
         // Reset the sync height to the start of the range.
-        state.sync_height = min(state.sync_height, *range.start());
+        state.update_sync_height(min(state.sync_height, *range.start()));
         return Ok(());
     };
 
