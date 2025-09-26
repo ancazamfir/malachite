@@ -6,7 +6,8 @@ use malachitebft_core_types::{Context, Height};
 use malachitebft_peer::PeerId;
 
 use crate::scoring::{ema, PeerScorer, Strategy};
-use crate::{Config, OutboundRequestId, PendingRequests, Status};
+use crate::{Config, PendingRequests, Status};
+// use crate::OutboundRequestId; // TODO: Re-add if get_request_id_by is restored
 
 pub struct State<Ctx>
 where
@@ -67,10 +68,9 @@ where
         self.peers.insert(status.peer_id, status);
     }
 
-    /// Update the sync height and propagate the change to pending requests
-    pub fn update_sync_height(&mut self, new_height: Ctx::Height) {
-        self.sync_height = new_height;
-        self.pending_requests.update_current_height(new_height);
+    /// Called when consensus decides on a height - cleans up obsolete pending requests
+    pub fn on_consensus_decided(&mut self, decided_height: Ctx::Height) {
+        self.pending_requests.remove_requests_up_to(decided_height);
     }
 
     /// Filter peers to only include those that can provide the given range of values, or at least a prefix of the range.
@@ -139,12 +139,13 @@ where
         self.random_peer_with_except(range, None)
     }
 
-    /// Get the request that contains the given height.
-    ///
-    /// Assumes a height cannot be in multiple pending requests.
-    pub fn get_request_id_by(&self, height: Ctx::Height) -> Option<(OutboundRequestId, PeerId)> {
-        self.pending_requests.get_request_id_by(height)
-    }
+    // TODO: Re-add get_request_id_by if needed after reviewing logic
+    // /// Get the request that contains the given height.
+    // ///
+    // /// Assumes a height cannot be in multiple pending requests.
+    // pub fn get_request_id_by(&self, height: Ctx::Height) -> Option<(OutboundRequestId, PeerId)> {
+    //     self.pending_requests.get_request_id_by(height)
+    // }
 
     /// Return a new range of heights, trimming from the beginning any height
     /// that is validated by consensus.
@@ -159,7 +160,7 @@ where
     /// When the tip height is higher than the requested range, then the request
     /// has been fully validated and it can be removed.
     pub fn remove_fully_validated_requests(&mut self) {
-        self.pending_requests
-            .retain(|_, (range, _)| range.end() > &self.tip_height);
+        // Use the new remove_requests_up_to method which is more appropriate
+        self.pending_requests.remove_requests_up_to(self.tip_height);
     }
 }

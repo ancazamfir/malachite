@@ -4,6 +4,7 @@ use std::ops::RangeInclusive;
 
 use malachitebft_core_types::{Context, Height};
 use malachitebft_peer::PeerId;
+use tracing::error;
 
 use crate::OutboundRequestId;
 
@@ -11,6 +12,8 @@ use crate::OutboundRequestId;
 ///
 /// Maintains an invariant that `next_uncovered_range` is always up-to-date and represents
 /// the next range that should be requested (with the smallest start height).
+///
+/// The start of `next_uncovered_range` effectively serves as the current sync height.
 ///
 /// Assumptions for optimization:
 /// 1. All ranges are disjoint (no overlapping requests)
@@ -20,14 +23,16 @@ pub struct PendingRequests<Ctx: Context> {
     /// Map of request ID to (range, peer_id)
     requests: BTreeMap<OutboundRequestId, (RangeInclusive<Ctx::Height>, PeerId)>,
 
-    /// Current sync height (starting point for next range calculation)
-    current_height: Ctx::Height,
-
     /// Maximum batch size for ranges
     max_batch_size: u64,
 
     /// Pre-computed next uncovered range (always up-to-date)
+    /// The start of this range is the effective "current sync height"
     next_uncovered_range: RangeInclusive<Ctx::Height>,
+
+    /// Control field: tracks the highest height that has been validated/removed
+    /// This ensures monotonic progress and validates consistency
+    last_validated_height: Ctx::Height,
 }
 
 impl<Ctx: Context> PendingRequests<Ctx> {
@@ -35,24 +40,68 @@ impl<Ctx: Context> PendingRequests<Ctx> {
         let max_batch_size = max(1, max_batch_size);
 
         // Compute initial next uncovered range
-        let mut end_height = initial_height;
-        for _ in 1..max_batch_size {
-            end_height = end_height.increment();
-        }
+        let end_height = initial_height.increment_by(max_batch_size - 1);
         let next_uncovered_range = initial_height..=end_height;
 
         Self {
             requests: BTreeMap::new(),
-            current_height: initial_height,
             max_batch_size,
             next_uncovered_range,
+            // Initialize to one less than initial height, or initial height if can't decrement
+            last_validated_height: initial_height.decrement().unwrap_or(initial_height),
         }
     }
 
-    /// Update the current sync height and recalculate the next uncovered range
-    pub fn update_current_height(&mut self, new_height: Ctx::Height) {
-        self.current_height = new_height;
-        self.update_next_range();
+    /// Get the current effective sync height (start of next uncovered range)
+    pub fn current_sync_height(&self) -> Ctx::Height {
+        *self.next_uncovered_range.start()
+    }
+
+    /// Remove all pending requests up to and including the given height
+    ///
+    /// This method removes all pending requests where end_range <= height,
+    /// typically called when consensus decides on a height and those ranges are no longer needed.
+    ///
+    /// If height < last_validated_height, logs an error and uses last_validated_height instead.
+    pub fn remove_requests_up_to(&mut self, height: Ctx::Height) {
+        // Handle non-monotonic progress gracefully
+        if height.as_u64() < self.last_validated_height.as_u64() {
+            error!(
+                height = height.as_u64(),
+                last_validated_height = self.last_validated_height.as_u64(),
+                "Non-monotonic progress in remove_requests_up_to: height < last_validated_height. Using last_validated_height instead."
+            );
+            return;
+        }
+        // Drop all pending requests that end at or before the effective height
+        self.requests.retain(|_, (range, _)| {
+            // Keep the request if it ends after the effective height
+            range.end().as_u64() > height.as_u64()
+        });
+
+        // Update control field to track progress
+        self.last_validated_height = height;
+
+        // Update to start syncing from the next height after the effective height
+        let new_sync_height = self.last_validated_height.increment();
+        let new_range = self.compute_next_uncovered_range_from(new_sync_height);
+        self.set_next_uncovered_range(new_range);
+    }
+
+    /// Private method to set next_uncovered_range with validation
+    ///
+    /// # Panics
+    /// Panics if the new range start <= last_validated_height (consistency violation)
+    fn set_next_uncovered_range(&mut self, new_range: RangeInclusive<Ctx::Height>) {
+        // Validate consistency before setting
+        assert!(
+            new_range.start().as_u64() > self.last_validated_height.as_u64(),
+            "Consistency violation: attempting to set next_uncovered_range.start() {} <= last_validated_height {}",
+            new_range.start().as_u64(),
+            self.last_validated_height.as_u64()
+        );
+
+        self.next_uncovered_range = new_range;
     }
 
     /// Insert a new pending request
@@ -63,6 +112,7 @@ impl<Ctx: Context> PendingRequests<Ctx> {
         peer_id: PeerId,
     ) {
         self.requests.insert(request_id, (range.clone(), peer_id));
+        // Update the next uncovered range based on the inserted range
         self.update_next_range_after_insert(&range);
     }
 
@@ -73,6 +123,7 @@ impl<Ctx: Context> PendingRequests<Ctx> {
     ) -> Option<(RangeInclusive<Ctx::Height>, PeerId)> {
         let result = self.requests.remove(request_id);
         if let Some((removed_range, _)) = &result {
+            // Update the next uncovered range based on the removed range
             self.update_next_range_after_remove(removed_range);
         }
         result
@@ -91,40 +142,10 @@ impl<Ctx: Context> PendingRequests<Ctx> {
         self.requests.len()
     }
 
-    /// Check if there are no pending requests
-    pub fn is_empty(&self) -> bool {
-        self.requests.is_empty()
-    }
-
-    /// Clear all pending requests
-    pub fn clear(&mut self) {
-        self.requests.clear();
-        self.update_next_range();
-    }
-
-    /// Retain only requests that match the given predicate
-    pub fn retain<F>(&mut self, f: F)
-    where
-        F: FnMut(&OutboundRequestId, &mut (RangeInclusive<Ctx::Height>, PeerId)) -> bool,
-    {
-        let old_len = self.requests.len();
-        self.requests.retain(f);
-        if self.requests.len() != old_len {
-            self.update_next_range();
-        }
-    }
-
-    /// Get all values (range, peer_id pairs)
-    pub fn values(&self) -> impl Iterator<Item = &(RangeInclusive<Ctx::Height>, PeerId)> {
-        self.requests.values()
-    }
-
     /// Get the next uncovered range that should be requested.
     ///
     /// This is always up-to-date and represents the next range with the smallest start height
     /// that is not covered by any pending request.
-    ///
-    /// Time complexity: O(1)
     pub fn next_uncovered_range(&self) -> RangeInclusive<Ctx::Height> {
         self.next_uncovered_range.clone()
     }
@@ -134,7 +155,8 @@ impl<Ctx: Context> PendingRequests<Ctx> {
     /// This method recalculates the next uncovered range and should be called
     /// whenever requests are added, removed, or the current height changes.
     fn update_next_range(&mut self) {
-        self.next_uncovered_range = self.compute_next_uncovered_range();
+        let new_range = self.compute_next_uncovered_range();
+        self.set_next_uncovered_range(new_range);
     }
 
     /// Smart update after inserting a range - uses knowledge of the specific inserted range
@@ -150,13 +172,16 @@ impl<Ctx: Context> PendingRequests<Ctx> {
         {
             // There's overlap - compute new next range starting after the inserted range
             let new_start = inserted_range.end().increment();
-            self.next_uncovered_range = self.compute_next_uncovered_range_from(new_start);
+            let new_range = self.compute_next_uncovered_range_from(new_start);
+            self.set_next_uncovered_range(new_range);
             return;
         }
 
-        // Edge case: inserted range might affect our current_height, need full recompute
-        if inserted_range.contains(&self.current_height) {
-            self.update_next_range();
+        // Edge case: inserted range might affect our current sync height, need full recompute
+        if inserted_range.contains(self.next_uncovered_range.start()) {
+            let new_range =
+                self.compute_next_uncovered_range_from(*self.next_uncovered_range.start());
+            self.set_next_uncovered_range(new_range);
             return;
         }
 
@@ -168,10 +193,11 @@ impl<Ctx: Context> PendingRequests<Ctx> {
         // Quick check: if removed range ends before our current next range, we might start earlier
         if removed_range.end().as_u64() < self.next_uncovered_range.start().as_u64() {
             // Check if we can now start from the removed range
-            let potential_start = max(self.current_height, *removed_range.start());
+            let potential_start = max(*self.next_uncovered_range.start(), *removed_range.start());
             if potential_start.as_u64() < self.next_uncovered_range.start().as_u64() {
                 // We might be able to start earlier - compute from this potential start
-                self.next_uncovered_range = self.compute_next_uncovered_range_from(potential_start);
+                let new_range = self.compute_next_uncovered_range_from(potential_start);
+                self.set_next_uncovered_range(new_range);
                 return;
             }
         }
@@ -188,7 +214,7 @@ impl<Ctx: Context> PendingRequests<Ctx> {
 
     /// Internal method to compute the next uncovered range using current state
     fn compute_next_uncovered_range(&self) -> RangeInclusive<Ctx::Height> {
-        self.compute_next_uncovered_range_from(self.current_height)
+        self.compute_next_uncovered_range_from(*self.next_uncovered_range.start())
     }
 
     /// Internal method to compute the next uncovered range starting from a specific height
@@ -210,10 +236,7 @@ impl<Ctx: Context> PendingRequests<Ctx> {
         }
 
         // Calculate the maximum possible end height based on batch size
-        let mut end_height = start_height;
-        for _ in 1..self.max_batch_size {
-            end_height = end_height.increment();
-        }
+        let mut end_height = start_height.increment_by(self.max_batch_size - 1);
 
         // Find the first range that would limit our end height
         // All remaining ranges either start at/after initial_height or contain initial_height
@@ -230,15 +253,6 @@ impl<Ctx: Context> PendingRequests<Ctx> {
         }
 
         start_height..=end_height
-    }
-
-    /// Get the request that contains the given height.
-    /// Assumes a height cannot be in multiple pending requests.
-    pub fn get_request_id_by(&self, height: Ctx::Height) -> Option<(OutboundRequestId, PeerId)> {
-        self.requests
-            .iter()
-            .find(|(_, (range, _))| range.contains(&height))
-            .map(|(request_id, (_, stored_peer_id))| (request_id.clone(), *stored_peer_id))
     }
 
     /// Get all ranges sorted by start height (for internal use by optimization logic)
