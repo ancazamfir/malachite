@@ -52,37 +52,47 @@ tests: ## Run all the tests.
 
 .PHONY: testnet testnet-mixed testnet-build testnet-down testnet-clean restart-validators test-integration
 
-testnet: testnet-clean ## Start testnet with 4 malachite containers
+testnet: testnet-clean ## Start testnet with 4 malachite containers (single network)
+	@echo "Setting up single-network testnet..."
 	@echo "Creating deployment directories..."
 	@mkdir -p ./deployments/volumes/malachite
 
-	@echo "Generating testnet configs..."
+	@echo "Generating base testnet structure (genesis, keys, etc.)..."
 	@cargo run --bin informalsystems-malachitebft-example-channel -- \
 		testnet \
 		--nodes 4 \
 		--home ./deployments/volumes/malachite
 
-	@echo "Configuring testnet topology..."
-	@./makefile-scripts/setup-testnet.sh
+	@echo "Copying single-network configs..."
+	@cp ./single-network-configs/node0-config.toml ./deployments/volumes/malachite/0/config/config.toml
+	@cp ./single-network-configs/node1-config.toml ./deployments/volumes/malachite/1/config/config.toml
+	@cp ./single-network-configs/node2-config.toml ./deployments/volumes/malachite/2/config/config.toml
+	@cp ./single-network-configs/node3-config.toml ./deployments/volumes/malachite/3/config/config.toml
 
-	@echo "Building and starting testnet containers..."
+	@echo "Starting single-network testnet..."
 	@docker compose up -d
 
-	@echo "Testnet started!"
+	@echo "Single-network testnet started!"
+	@echo "  Network topology:"
+	@echo "    All nodes: Single network (172.20.0.x)"
+	@echo "    Node3: Connects via host IP (192.168.1.147) to test port mapping scenario"
 
 testnet-mixed: testnet-clean ## Start mixed-version testnet with old and new binaries
 	@echo "Setting up mixed-version testnet..."
 	@echo "Creating deployment directories..."
 	@mkdir -p ./deployments/volumes/malachite
 
-	@echo "Generating testnet configs..."
+	@echo "Generating base testnet structure (genesis, keys, etc.)..."
 	@cargo run --bin informalsystems-malachitebft-example-channel -- \
 		testnet \
 		--nodes 4 \
 		--home ./deployments/volumes/malachite
 
-	@echo "Configuring testnet topology..."
-	@./makefile-scripts/setup-testnet.sh
+	@echo "Copying single-network configs..."
+	@cp ./single-net-configs/node0-config.toml ./deployments/volumes/malachite/0/config/config.toml
+	@cp ./single-net-configs/node1-config.toml ./deployments/volumes/malachite/1/config/config.toml
+	@cp ./single-net-configs/node2-config.toml ./deployments/volumes/malachite/2/config/config.toml
+	@cp ./single-net-configs/node3-config.toml ./deployments/volumes/malachite/3/config/config.toml
 
 	@echo "Building mixed-version binaries..."
 	@./makefile-scripts/setup-mixed-testnet.sh
@@ -91,7 +101,8 @@ testnet-mixed: testnet-clean ## Start mixed-version testnet with old and new bin
 	@docker compose -f docker-compose-mixed.yml up -d
 
 	@echo "Mixed-version testnet started!"
-	@echo "  Nodes 0,1,2: Old version (commit befe02ace...)"
+	@echo "  Network topology: Same as single-network testnet"
+	@echo "  Nodes 0,1,2: Old version binaries"
 	@echo "  Node 3: Latest version (current HEAD)"
 
 testnet-build: ## Build the testnet binary and Docker images
@@ -115,7 +126,7 @@ restart-validators: ## Restart validator nodes (0,1,2) while keeping node 3 runn
 test-integration: ## Full integration test: start testnet, check sockets, restart validators, check sockets
 	@echo "Starting comprehensive testnet test..."
 	@echo ""
-	@echo "Test Plan:"
+	@echo "Test:"
 	@echo "  1. Start testnet (4 nodes)"
 	@echo "  2. Wait for initial connections (15s)"
 	@echo "  3. Check socket status"
@@ -165,3 +176,60 @@ status: ## Show testnet status
 			echo "  $$node: DOWN"; \
 		fi; \
 	done
+
+testnet-multi: testnet-clean ## Start multi-network testnet to test NAT/address scenarios
+	@echo "Setting up multi-network testnet..."
+	@echo "Creating deployment directories..."
+	@mkdir -p ./deployments/volumes/malachite
+
+	@echo "Generating base testnet structure (genesis, keys, etc.)..."
+	@cargo run --bin informalsystems-malachitebft-example-channel -- \
+		testnet \
+		--nodes 4 \
+		--home ./deployments/volumes/malachite
+
+	@echo "Copying multi-network configs..."
+	@cp ./multi-net-configs/node0-config.toml ./deployments/volumes/malachite/0/config/config.toml
+	@cp ./multi-net-configs/node1-config.toml ./deployments/volumes/malachite/1/config/config.toml
+	@cp ./multi-net-configs/node2-config.toml ./deployments/volumes/malachite/2/config/config.toml
+	@cp ./multi-net-configs/node3-config.toml ./deployments/volumes/malachite/3/config/config.toml
+
+	@echo "Starting multi-network testnet..."
+	@docker compose -f docker-compose-multi-network.yml up -d
+
+	@echo "Multi-network testnet started!"
+	@echo "  Network topology:"
+	@echo "    Validators (0,1,2): Internal (172.21.0.x) + Public (172.23.0.x) networks"
+	@echo "    Node3: External (172.22.0.x) + Public (172.23.0.x) networks"
+	@echo "  Test scenario: Address mismatch between dial_data and identify info"
+	@echo "    - Node3 dials validators via 172.23.0.x (public addresses)"
+	@echo "    - Validators advertise 172.21.0.x (internal addresses) in identify"
+	@echo "    - Bootstrap matching tests dial_data vs identify address logic"
+
+testnet-nat: testnet-clean ## Start NAT testnet scenario
+	@echo "Setting up NAT testnet scenario..."
+	@echo "Creating deployment directories..."
+	@mkdir -p ./deployments/volumes/malachite
+
+	@echo "Generating base testnet structure (genesis, keys, etc.)..."
+	@cargo run --bin informalsystems-malachitebft-example-channel -- \
+		testnet \
+		--nodes 4 \
+		--home ./deployments/volumes/malachite
+
+	@echo "Copying NAT scenario configs..."
+	@cp ./nat-configs/node0-config.toml ./deployments/volumes/malachite/0/config/config.toml
+	@cp ./nat-configs/node1-config.toml ./deployments/volumes/malachite/1/config/config.toml
+	@cp ./nat-configs/node2-config.toml ./deployments/volumes/malachite/2/config/config.toml
+	@cp ./nat-configs/node3-config.toml ./deployments/volumes/malachite/3/config/config.toml
+
+	@echo "Starting NAT testnet..."
+	@docker compose -f docker-compose-nat.yml up -d
+
+	@echo "NAT testnet started!"
+	@echo "  Network topology:"
+	@echo "    Validators (0,1,2): Internal network (192.168.100.x) with port mappings"
+	@echo "    Node3: External network (10.0.1.x) reaching validators via NAT gateway"
+	@echo "  Test scenario: NAT traversal and bootstrap identification"
+	@echo "    - Node3 connects via host IP (10.0.1.1) to reach validators"
+	@echo "    - Validators have internal IPs but are reachable via port mapping"
