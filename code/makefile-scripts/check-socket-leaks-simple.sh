@@ -70,9 +70,16 @@ for node in node0 node1 node2 node3; do
                 
                 case $state in
                     "01") state_name="ESTABLISHED";;
-                    "0A") state_name="LISTEN";;
+                    "02") state_name="SYN_SENT";;
+                    "03") state_name="SYN_RECV";;
+                    "04") state_name="FIN_WAIT1";;
+                    "05") state_name="FIN_WAIT2";;
                     "06") state_name="TIME_WAIT";;
+                    "07") state_name="CLOSE";;
                     "08") state_name="CLOSE_WAIT";;
+                    "09") state_name="LAST_ACK";;
+                    "0A") state_name="LISTEN";;
+                    "0B") state_name="CLOSING";;
                     *) state_name="$state";;
                 esac
                 
