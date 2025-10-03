@@ -264,6 +264,16 @@ async fn run(
         return;
     }
 
+    if let Err(e) = pubsub::subscribe(
+        &mut swarm,
+        config.pubsub_protocol,
+        Channel::consensus(),
+        config.channel_names,
+    ) {
+        error!("Error subscribing to consensus channels: {e}");
+        return;
+    };
+
     if config.enable_sync {
         if let Err(e) = pubsub::subscribe(
             &mut swarm,
