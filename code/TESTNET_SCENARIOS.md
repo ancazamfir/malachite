@@ -77,12 +77,6 @@ Container orchestration environments where:
 - **Docker Swarm**: External traffic routes through manager node IPs, but services advertise internal overlay network IPs
 - **Cloud Load Balancers**: External traffic hits public load balancer IPs, but backend services advertise private subnet IPs
 
-**Note**: The `make testnet-mixed` command uses the same network topology as `make testnet` (single-network scenario) but tests validators 0..2 with different binary versions than node3:
-- **Nodes 0,1,2**: Old version binaries with commit #befe02ace90ea38eed4795d42157b3bfe61d0572, before the reconnect feature was introduced. See `./makefile-scripts/setup-mixed-testnet.sh`  
-- **Node 3**: Latest version (current HEAD)
-
-This validates that P2P discovery and bootstrap identification work correctly across different software versions.
-
 ---
 
 ## `make testnet-multi` - Multi-Network Address Mismatch
@@ -213,10 +207,8 @@ NAT-based environments where:
 ### Commands:
 ```bash
 make testnet          # Single network + host IP scenario
-make testnet-mixed    # Single network + host IP scenario + mixed binaries
 make testnet-multi    # Multi-network address mismatch
 make testnet-nat      # True NAT with gateway
-make testnet-mixed    # Mixed version testing
 make test-integration # Run basic integration test, starts network, checks sockets, restarts validators 0..2
 ```
 
