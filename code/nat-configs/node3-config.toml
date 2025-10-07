@@ -19,16 +19,12 @@ queue_capacity = 100
 listen_addr = "/ip4/0.0.0.0/tcp/27000"
 # Node3 connects to validators via Docker host gateway (through NAT/port mapping)
 # These are the addresses that actually work for reaching validators from external network
-persistent_peers = [
-    "/ip4/10.0.1.254/tcp/27000",  # Reaches validator-0 via NAT gateway
-    "/ip4/10.0.1.254/tcp/27001",  # Reaches validator-1 via NAT gateway  
-    "/ip4/10.0.1.254/tcp/27002"   # Reaches validator-2 via NAT gateway
-]
+persistent_peers = ["/ip4/10.0.1.254/tcp/27000"]
 pubsub_max_size = "4.2 MB"
 rpc_max_size = "10.5 MB"
 
 [consensus.p2p.discovery]
-enabled = false
+enabled = true
 bootstrap_protocol = "full"
 selector = "random" 
 num_outbound_peers = 20
