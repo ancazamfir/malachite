@@ -19,7 +19,7 @@ Each scenario validates that the bootstrap identification logic correctly uses `
 
 ### Network Topology:
 ```
-DOCKER HOST: 192.168.1.147
+DOCKER HOST: 192.168.1.147 (my Mac en0 interface)
 Port 27000 ----+    Port 27001 ----+    Port 27002 ----+
                |                   |                   |
                v                   v                   v
@@ -54,6 +54,24 @@ ADDRESS MISMATCH TEST:
 • Validators advertise: 172.20.0.x (what they think)
 • Bootstrap logic must use dial_data, not identify info
 ```
+
+### Connection Flow node3 -> node1
+```
+node3 container (172.20.0.13) 
+  ↓
+  dials: 192.168.1.147:27001  ← Mac's en0 interface
+  ↓
+  [Docker NAT/Port Forwarding] 
+  "27001:27000" mapping
+  ↓
+node1 container (172.20.0.11:27000)
+```
+On connection establishment node3 gets:
+```
+listen_addrs: [/ip4/172.20.0.11/tcp/27000, /ip4/127.0.0.1/tcp/27000]
+observed_addr: /ip4/192.168.65.1/tcp/35631
+```
+`observed_addr` - the external address that node0 sees for node3. `192.168.65.1` is the docker desktop internal gateway that containers use to communicate with the host
 
 ### Configuration:
 - **Docker Compose**: `docker-compose.yml`
@@ -117,6 +135,19 @@ ADDRESS MISMATCH TEST:
 • Bootstrap logic must use dial_data, not identify info
 ```
 
+### Connection Flow node3 -> node1
+
+```
+node3 (172.23.0.13) ──► node1 (172.23.0.11)
+                    via public_net
+```
+
+On connection establishment node3 gets:
+```
+listen_addrs: [/ip4/172.21.0.11/tcp/27000, /ip4/127.0.0.1/tcp/27000, /ip4/172.23.0.11/tcp/27000]
+observed_addr: /ip4/172.23.0.13/tcp/56880
+```
+
 ### Configuration:
 - **Docker Compose**: `docker-compose-multi-network.yml`
 - **Networks**: 
@@ -173,6 +204,43 @@ ADDRESS MISMATCH TEST:
 • Validators advertise: 192.168.100.x (what they think)
 • Bootstrap logic must use dial_data, not identify info
 ```
+
+### Connection Flow for node3 -> node1
+
+```
+node3 (10.0.1.13) ──dial──> 10.0.1.254:27001
+                                  │
+                                  ▼
+                        ┌─────────────────┐
+                        │  NAT Gateway    │
+                        │  socat process  │
+                        │  Port Forward   │
+                        └─────────────────┘
+                                  │
+                                  ▼
+                    TCP-LISTEN:27001,fork,reuseaddr
+                                  │
+                                  ▼
+                    TCP:192.168.100.11:27000
+                                  │
+                                  ▼
+                        node1 (192.168.100.11)
+                        receives connection
+```
+
+On connection establishment node3 gets:
+```
+listen_addrs: [/ip4/127.0.0.1/tcp/27000, /ip4/192.168.100.11/tcp/27000]
+observed_addr: /ip4/192.168.100.254/tcp/42846
+```
+Note that the observed_addr is the NAT gateway internal IP. Node3 cannot reach its address as observed by node1:
+external_net (10.0.1.0/24):
+ - node3: 10.0.1.13
+ - nat_gateway: 10.0.1.254 ← External interface
+internal_net (192.168.100.0/24):
+ - node1: 192.168.100.11
+ - nat_gateway: 192.168.100.254 ← Internal interface
+
 
 ### Configuration:
 - **Docker Compose**: `docker-compose-nat.yml`
