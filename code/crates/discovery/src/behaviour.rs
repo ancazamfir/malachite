@@ -69,8 +69,9 @@ pub struct Behaviour {
 fn kademlia_config(name: String) -> Result<kad::Config> {
     let mut config = kad::Config::new(StreamProtocol::try_from_owned(name)?);
 
-    // In production, one might set this to a high value to keep a fresh view of the network
-    config.set_periodic_bootstrap_interval(None);
+    // Periodic bootstrap ensures nodes discover peers that join after initial bootstrap
+    // Set to 5 seconds for testing. In production use a higher value (e.g., 30-60 seconds)
+    config.set_periodic_bootstrap_interval(Some(Duration::from_secs(5)));
 
     Ok(config)
 }
