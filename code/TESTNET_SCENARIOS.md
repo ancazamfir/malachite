@@ -284,6 +284,135 @@ NAT-based environments where:
 - **Cloud NAT gateways**: Private cloud instances accessible via NAT gateway or load balancer with completely different address spaces
 - **Container networks**: Services in private overlay networks, external access via host port mapping or ingress controllers
 
+
+## `make testnet-sentry` - Sentry Node Architecture
+
+**Purpose**: Production-like architecture with isolated validator networks connected via sentry nodes. Tests cross-datacenter/multi-region consensus with proper network isolation.
+
+### Network Topology:
+```
+PRIVATE NETWORK A        PUBLIC NETWORK           PRIVATE NETWORK B
+172.20.0.0/24           10.0.0.0/24              172.21.0.0/24
+
++------------------+     +------------------+     +------------------+
+|      node0       |<--->|                  |<--->|      node4       |
+| 172.20.0.10      |     |                  |     | 172.21.0.14      |
+| (validator)      |     |                  |     | (validator)      |
++------------------+     |                  |     +------------------+
+                         |                  |
++------------------+     |                  |     +------------------+
+|      node1       |<--->|                  |<--->|      node5       |
+| 172.20.0.11      |     |     node3        |     | 172.21.0.15      |
+| (validator)      |     |  (sentry A)      |     | (validator)      |
++------------------+     | 172.20.0.13      |     +------------------+
+                         | 10.0.0.3         |
++------------------+     |       ◄──────►   |     +------------------+
+|      node2       |<--->|                  |<--->|      node6       |
+| 172.20.0.12      |     |     node7        |     | 172.21.0.16      |
+| (fullnode)       |     |  (sentry B)      |     | (fullnode)       |
++------------------+     | 172.21.0.17      |     +------------------+
+                         | 10.0.0.7         |
++------------------+     |                  |     +------------------+
+|      node3       |<--->|                  |<--->|      node7       |
+| 172.20.0.13      |     +------------------+     | 172.21.0.17      |
+| (sentry)         |                              | (sentry)         |
+| 10.0.0.3         |                              | 10.0.0.7         |
++------------------+                              +------------------+
+
+Network Isolation:
+• Validators (0,1,4,5) ONLY connect to their local sentry
+• Full nodes (2,6) ONLY connect to their local sentry
+• Sentries (3,7) connect to local validators AND remote sentry
+• No direct validator-to-validator connections across networks
+
+ADDRESS ROUTING:
+• node0 -> node3 (private A): 172.20.0.13
+• node3 -> node7 (public): 10.0.0.7
+• node7 -> node4 (private B): 172.21.0.14
+```
+
+### Connection Flow for node3 -> node1
+
+**Within Private Network A:**
+```
+node3 (sentry)
+  ↓ dial 172.20.0.11
+  ↓ (private_net_a)
+node1 (validator)
+```
+
+**Across Public Network (node3 -> node7):**
+```
+node3 (sentry A)
+ 172.20.0.13 (private interface)
+ 10.0.0.3 (public interface)
+  ↓ dial 10.0.0.7
+  ↓ (public_net)
+node7 (sentry B)
+ 10.0.0.7 (public interface)
+ 172.21.0.17 (private interface)
+```
+
+**Message Flow (node0 -> node4):**
+```
+node0 (validator, network A)
+  ↓ gossipsub to node3
+node3 (sentry A) 
+  ↓ gossipsub to node7 (via public network)
+node7 (sentry B)
+  ↓ gossipsub to node4
+node4 (validator, network B)
+```
+
+On connection establishment, each node gets appropriate addresses:
+- node0 sees: node3 at `172.20.0.13` (reachable via private A)
+- node3 sees: node7 at `10.0.0.7` (reachable via public)
+- node7 sees: node4 at `172.21.0.14` (reachable via private B)
+
+### Configuration:
+- **Docker Compose**: `docker-compose-sentry.yml`
+- **Networks**:
+  - `private_net_a` (172.20.0.0/24) - Validator cluster A
+  - `private_net_b` (172.21.0.0/24) - Validator cluster B
+  - `public_net` (10.0.0.0/24) - Sentry interconnect
+- **Configs**: `sentry-configs/`
+- **Validator Count**: 4 (node0, node1, node4, node5)
+- **Sentry Nodes**: 2 (node3, node7)
+- **Full Nodes**: 2 (node2, node6)
+
+### Key Features:
+
+**Network Isolation:**
+- Validators never directly connect to public network
+- Validators only know about their local sentry
+- Cross-network communication only through sentries
+
+**Security Benefits:**
+- Validators protected from external attacks
+- DDoS attacks hit sentries, not validators
+- Can easily add more sentries for redundancy
+- Validators don't expose addresses to public network
+
+
+### Applicability:
+**Common scenarios**: 
+
+**Production Environments:**
+- Multi-datacenter deployments (validators in different DCs)
+- Multi-region consensus (validators across continents)
+- Hybrid cloud (some validators on-prem, some in cloud)
+- Security-focused deployments (validator isolation)
+
+**Enterprise Networks:**
+- Validators in secured network zones (DMZ architecture)
+- Compliance requirements (validators must be isolated)
+- Network segmentation (separate validator and full node networks)
+
+**Cosmos/Tendermint Standard:**
+- This is the recommended production architecture
+- Used by Cosmos Hub, Osmosis, and other major chains
+- Best practice for validator security
+
 ---
 
 

@@ -24,8 +24,8 @@ rpc_max_size = "10.5 MB"
 
 [consensus.p2p.discovery]
 enabled = true
-bootstrap_protocol = "full"
-selector = "random" 
+bootstrap_protocol = "kademlia"
+selector = "kademlia" 
 num_outbound_peers = 20
 num_inbound_peers = 20
 max_connections_per_peer = 5

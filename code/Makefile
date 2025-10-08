@@ -135,16 +135,50 @@ test-integration: ## Full integration test: start testnet, check sockets, restar
 
 ##@ Debug Commands
 
-.PHONY: monitor-sockets logs logs-node3 status
+.PHONY: monitor-sockets monitor-sockets-multi monitor-sockets-sentry logs logs-follow logs-node logs-node3 status
 
-monitor-sockets: ## Monitor socket connections in real-time
-	@./makefile-scripts/monitor-sockets.sh monitor
+monitor-sockets: ## Monitor socket connections in real-time (auto-detects running testnet)
+	@./makefile-scripts/monitor-sockets.sh "" monitor
 
-logs: ## Show logs from all nodes
-	@docker compose logs node0 node1 node2 node3
+monitor-sockets-multi: ## Monitor socket connections for multi-network testnet
+	@./makefile-scripts/monitor-sockets.sh docker-compose-multi-network.yml monitor
+
+monitor-sockets-sentry: ## Monitor socket connections for sentry testnet
+	@./makefile-scripts/monitor-sockets.sh docker-compose-sentry.yml monitor
+
+logs: ## Show logs from all nodes (auto-detects compose file)
+	@if docker compose -f docker-compose-sentry.yml ps 2>/dev/null | grep -q "Up"; then \
+		docker compose -f docker-compose-sentry.yml logs node0 node1 node2 node3 node4 node5 node6 node7; \
+	elif docker compose -f docker-compose-multi-network.yml ps 2>/dev/null | grep -q "Up"; then \
+		docker compose -f docker-compose-multi-network.yml logs node0 node1 node2 node3; \
+	else \
+		docker compose logs node0 node1 node2 node3; \
+	fi
+
+logs-follow: ## Follow logs from all nodes (auto-detects compose file)
+	@if docker compose -f docker-compose-sentry.yml ps 2>/dev/null | grep -q "Up"; then \
+		docker compose -f docker-compose-sentry.yml logs -f; \
+	elif docker compose -f docker-compose-multi-network.yml ps 2>/dev/null | grep -q "Up"; then \
+		docker compose -f docker-compose-multi-network.yml logs -f; \
+	else \
+		docker compose logs -f; \
+	fi
+
+logs-node: ## Follow logs from a specific node (usage: make logs-node NODE=node3)
+	@if [ -z "$(NODE)" ]; then \
+		echo "Error: Please specify NODE, e.g., make logs-node NODE=node3"; \
+		exit 1; \
+	fi; \
+	if docker compose -f docker-compose-sentry.yml ps 2>/dev/null | grep -q "Up"; then \
+		docker compose -f docker-compose-sentry.yml logs -f $(NODE); \
+	elif docker compose -f docker-compose-multi-network.yml ps 2>/dev/null | grep -q "Up"; then \
+		docker compose -f docker-compose-multi-network.yml logs -f $(NODE); \
+	else \
+		docker compose logs -f $(NODE); \
+	fi
 
 logs-node3: ## Follow logs from node 3 (useful after validator restart)
-	@docker compose logs -f node3
+	@$(MAKE) logs-node NODE=node3
 
 status: ## Show testnet status
 	@echo "Socket connections:"
@@ -216,3 +250,52 @@ testnet-nat: testnet-clean ## Start NAT testnet scenario
 
 testnet-nat-down: ## Stop NAT testnet
 	@docker compose -f docker-compose-nat.yml down > /dev/null 2>&1 || true
+
+testnet-sentry: testnet-clean ## Start sentry node testnet scenario
+	@echo "Setting up sentry node testnet scenario..."
+	@echo "Creating deployment directories..."
+	@mkdir -p ./deployments/volumes/malachite
+
+	@echo "Generating base testnet structure (genesis, keys, etc.)..."
+	@cargo run --bin informalsystems-malachitebft-example-channel -- \
+		testnet \
+		--nodes 8 \
+		--home ./deployments/volumes/malachite
+
+	@echo "Copying sentry scenario configs..."
+	@cp ./sentry-configs/node0-config.toml ./deployments/volumes/malachite/0/config/config.toml
+	@cp ./sentry-configs/node1-config.toml ./deployments/volumes/malachite/1/config/config.toml
+	@cp ./sentry-configs/node2-config.toml ./deployments/volumes/malachite/2/config/config.toml
+	@cp ./sentry-configs/node3-config.toml ./deployments/volumes/malachite/3/config/config.toml
+	@cp ./sentry-configs/node4-config.toml ./deployments/volumes/malachite/4/config/config.toml
+	@cp ./sentry-configs/node5-config.toml ./deployments/volumes/malachite/5/config/config.toml
+	@cp ./sentry-configs/node6-config.toml ./deployments/volumes/malachite/6/config/config.toml
+	@cp ./sentry-configs/node7-config.toml ./deployments/volumes/malachite/7/config/config.toml
+
+	@echo "Starting sentry testnet..."
+	@docker compose -f docker-compose-sentry.yml up -d
+
+	@echo "Sentry testnet started!"
+	@echo "  Network topology:"
+	@echo "    Private Network A (172.20.0.0/24):"
+	@echo "      - node0 (validator): 172.20.0.10"
+	@echo "      - node1 (validator): 172.20.0.11"
+	@echo "      - node2 (fullnode): 172.20.0.12"
+	@echo "      - node3 (sentry): 172.20.0.13 + 10.0.0.3"
+	@echo "    Private Network B (172.21.0.0/24):"
+	@echo "      - node4 (validator): 172.21.0.14"
+	@echo "      - node5 (validator): 172.21.0.15"
+	@echo "      - node6 (fullnode): 172.21.0.16"
+	@echo "      - node7 (sentry): 172.21.0.17 + 10.0.0.7"
+	@echo "    Public Network (10.0.0.0/24):"
+	@echo "      - node3 (sentry): 10.0.0.3"
+	@echo "      - node7 (sentry): 10.0.0.7"
+	@echo "  Connectivity:"
+	@echo "    - Validators in network A connect only to sentry node3"
+	@echo "    - Validators in network B connect only to sentry node7"
+	@echo "    - Sentry nodes node3 and node7 connect via public network"
+	@echo "    - 4 validators total: node0, node1, node4, node5"
+	@echo "  Test scenario: Sentry node architecture with isolated private networks"
+
+testnet-sentry-down: ## Stop sentry testnet
+	@docker compose -f docker-compose-sentry.yml down > /dev/null 2>&1 || true
