@@ -11,6 +11,23 @@ There are 3 distinct testnet scenarios that test the bootstrap discovery:
 
 Each scenario validates that the bootstrap identification logic correctly uses `dial_data` addresses (that actually work) rather than `identify` protocol addresses (that peers advertise but may not be reachable).
 
+## Test Status with Discovery Enabled
+
+| Testnet Scenario | Full Discovery | Kademlia Discovery | Notes |
+|-----------------|----------------|-------------------|-------|
+| `make testnet` | ✅ Working | ✅ Working | |
+| `make testnet` + restart validators | ✅ Working  | ✅ Working  | |
+| `make testnet-multi` | ✅ Working | ✅ Working |  |
+| `make testnet-multi` + restart validators | ❌ Broken |  ❌ Broken | after restart node3 only connected to node0 |
+| `make testnet-nat` | ❌ Broken | ❌ Broken |  |
+| `make testnet-nat` + restart validators | ❌ Broken | ❌ Broken |  |
+
+**Legend:**
+- ✅ Working - Tested and functioning correctly
+- ⚠️ Needs Testing - Not yet validated
+- ❌ Broken - Known issues, needs fixes
+- 🔧 In Progress - Currently being debugged/fixed
+
 ---
 
 ## `make testnet` - Single Network + Host IP
