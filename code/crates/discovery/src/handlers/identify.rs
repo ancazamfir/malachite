@@ -1,9 +1,41 @@
-use libp2p::{identify, swarm::ConnectionId, PeerId, Swarm};
+use libp2p::{identify, swarm::ConnectionId, Multiaddr, PeerId, Swarm};
 use tracing::{debug, info, warn};
 
 use crate::config::BootstrapProtocol;
 use crate::OutboundState;
 use crate::{request::RequestData, Discovery, DiscoveryClient, State};
+
+/// Filter out loopback addresses from a peer's advertised addresses.
+///
+/// Loopback addresses (127.0.0.1, ::1) are not dialable from remote nodes.
+/// However, if a peer only advertises loopback addresses (local setup scenario),
+/// they are preserved in order to maintain connectivity in single-machine environments.
+fn filter_loopback_addresses(addrs: &[Multiaddr], peer_id: &PeerId) -> Vec<Multiaddr> {
+    let non_loopback_addrs: Vec<_> = addrs
+        .iter()
+        .filter(|addr| {
+            let addr_str = addr.to_string();
+            !addr_str.contains("127.0.0.1") && !addr_str.contains("::1")
+        })
+        .cloned()
+        .collect();
+
+    if non_loopback_addrs.is_empty() {
+        // Peer only has loopback addresses (local setup) - keep them
+        addrs.to_vec()
+    } else {
+        // Peer has non-loopback addresses - use only those
+        if non_loopback_addrs.len() != addrs.len() {
+            debug!(
+                "Filtered loopback addresses for peer {}: {} -> {} addresses",
+                peer_id,
+                addrs.len(),
+                non_loopback_addrs.len()
+            );
+        }
+        non_loopback_addrs
+    }
+}
 
 impl<C> Discovery<C>
 where
@@ -33,7 +65,8 @@ where
     ///    - If match found: update `bootstrap_nodes[i].0 = Some(peer_id)`
     ///
     /// Called after connection is established but before peer is added to active_connections
-    fn update_bootstrap_node_peer_id(&mut self, peer_id: PeerId) {
+    /// Returns true if this peer was identified as a bootstrap node
+    fn update_bootstrap_node_peer_id(&mut self, peer_id: PeerId) -> bool {
         debug!(
             "Checking peer {} against {} bootstrap nodes",
             peer_id,
@@ -50,7 +83,7 @@ where
                 "Peer {} already identified in bootstrap_nodes - skipping",
                 peer_id
             );
-            return;
+            return false;
         }
 
         // Find the dial_data that was updated in handle_connection
@@ -63,7 +96,7 @@ where
         else {
             // This happens for incoming connections (peers that dialed this node)
             // since no dial_data was created for them
-            return;
+            return false;
         };
 
         // Match dial addresses against bootstrap node configurations
@@ -78,13 +111,14 @@ where
                 // Bootstrap discovery completed: None -> Some(peer_id)
                 info!("Bootstrap peer {} successfully identified", peer_id);
                 *maybe_peer_id = Some(peer_id);
-                return;
+                return true; // Indicate this was a bootstrap node
             }
         }
 
         // This is only debug because some dialed peers (e.g. with discovery enabled)
         // are not one of the locally configured bootstrap nodes
         debug!("Failed to identify peer as bootstrap {}", peer_id);
+        false
     }
 
     pub fn handle_new_peer(
@@ -106,8 +140,13 @@ where
             return is_already_connected;
         }
 
+        debug!(
+            "Identify received from peer {}: listen_addrs = {:?}",
+            peer_id, info.listen_addrs
+        );
+
         // Match peer against bootstrap nodes
-        self.update_bootstrap_node_peer_id(peer_id);
+        let was_identified_as_bootstrap = self.update_bootstrap_node_peer_id(peer_id);
 
         if self
             .controller
@@ -120,12 +159,28 @@ where
                 .dial_remove_matching_in_progress_connections(&peer_id);
         }
 
-        match self.discovered_peers.insert(peer_id, info.clone()) {
-            Some(_) => {
+        // Filter loopback addresses from the peer's advertised addresses
+        let filtered_addrs = filter_loopback_addresses(&info.listen_addrs, &peer_id);
+
+        let filtered_info = identify::Info {
+            listen_addrs: filtered_addrs,
+            ..info
+        };
+
+        match self.discovered_peers.insert(peer_id, filtered_info.clone()) {
+            Some(old_info) => {
                 info!(
                     peer = %peer_id, %connection_id,
                     "New connection from known peer",
                 );
+
+                // Log if addresses changed
+                if old_info.listen_addrs != filtered_info.listen_addrs {
+                    debug!(
+                        "Updated addresses for peer {}: {:?} -> {:?}",
+                        peer_id, old_info.listen_addrs, filtered_info.listen_addrs
+                    );
+                }
             }
             None => {
                 info!(
@@ -136,6 +191,17 @@ where
                 self.metrics.increment_total_discovered();
             }
         }
+
+        // Log current discovered_peers state
+        debug!(
+            "discovered_peers state: {} peers = {:?}",
+            self.discovered_peers.len(),
+            self.discovered_peers
+                .iter()
+                .map(|(id, info)| format!("{}[{}]", id, info.listen_addrs.len()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         if let Some(connection_ids) = self.active_connections.get_mut(&peer_id) {
             if connection_ids.len() >= self.config.max_connections_per_peer {
@@ -214,9 +280,10 @@ where
             }
             // Add the address to the Kademlia routing table
             if self.config.bootstrap_protocol == BootstrapProtocol::Kademlia {
-                swarm
-                    .behaviour_mut()
-                    .add_address(&peer_id, info.listen_addrs.first().unwrap().clone());
+                swarm.behaviour_mut().add_address(
+                    &peer_id,
+                    filtered_info.listen_addrs.first().unwrap().clone(),
+                );
             }
         } else {
             // If discovery is disabled, all peers are inbound. The
@@ -235,6 +302,26 @@ where
 
                 // Set to true to avoid triggering new connection logic
                 is_already_connected = true;
+            }
+        }
+
+        // Check if we need to trigger rediscovery after bootstrap peer reconnects
+        if was_identified_as_bootstrap
+            && self.state == State::Idle
+            && self.outbound_peers.len() < self.config.num_outbound_peers
+        {
+            info!(
+                "Bootstrap node {} reconnected, triggering rediscovery (have {} outbound peers, need {})",
+                peer_id,
+                self.outbound_peers.len(),
+                self.config.num_outbound_peers
+            );
+
+            if self.config.bootstrap_protocol == BootstrapProtocol::Full {
+                debug!("Re-triggering full discovery extension");
+                self.initiate_extension_with_target(swarm, self.config.num_outbound_peers);
+            } else {
+                debug!("Kademlia bootstrap will be triggered by automatic bootstrap mechanism");
             }
         }
 

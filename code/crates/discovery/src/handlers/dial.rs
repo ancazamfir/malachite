@@ -126,63 +126,108 @@ where
         connection_id: ConnectionId,
         error: DialError,
     ) {
-        if let Some(mut dial_data) = self.controller.dial.remove_in_progress(&connection_id) {
-            // Skip retrying for errors that will occur again
-            if matches!(
-                error,
-                DialError::LocalPeerId { .. }
-                    | DialError::NoAddresses
-                    | DialError::WrongPeerId { .. }
-            ) {
+        // Get the dial data but keep checking before removing from in_progress
+        let dial_data = match self.controller.dial.get_in_progress_mut(&connection_id) {
+            Some(data) => data.clone(),
+            None => {
+                // Connection wasn't tracked, nothing to do
+                return;
+            }
+        };
+
+        // Skip retrying for errors that will occur again or when a dial is already in progress
+        if matches!(
+            error,
+            DialError::LocalPeerId { .. }
+                | DialError::NoAddresses
+                | DialError::WrongPeerId { .. }
+                | DialError::Denied { .. } // Dial already in progress, let libp2p finish
+        ) {
+            self.controller.dial.remove_in_progress(&connection_id);
+            self.make_extension_step(swarm);
+            return;
+        }
+
+        // Check if we're already connected or if there is still an ongoing dial to this peer
+        // This can happen when libp2p is trying multiple addresses and one fails while others are still being tried
+        if let Some(peer_id) = dial_data.peer_id() {
+            if swarm.is_connected(&peer_id) {
+                debug!("Peer {peer_id} is already connected, skipping retry");
+                self.controller.dial.remove_in_progress(&connection_id);
                 self.make_extension_step(swarm);
                 return;
             }
 
-            if dial_data.retry.count() < self.config.dial_max_retries {
-                // Retry dialing after a delay
-                dial_data.retry.inc_count();
+            // Check if there are other in-progress dials to this peer (excluding the current one)
+            let other_dials_count = self
+                .controller
+                .dial
+                .get_in_progress_iter()
+                .filter(|(id, data)| *id != &connection_id && data.peer_id() == Some(peer_id))
+                .count();
 
-                let next_delay = dial_data.retry.next_delay();
-
-                self.controller
-                    .dial
-                    .add_to_queue(dial_data.clone(), Some(next_delay));
-            } else {
-                // No more trials left
-                error!(
-                    "Failed to dial peer {:?} at {:?} after {} trials",
-                    dial_data.peer_id(),
-                    dial_data.listen_addrs(),
-                    dial_data.retry.count(),
+            if other_dials_count > 0 {
+                debug!(
+                    "Another {} dial attempt(s) to peer {peer_id} in progress, skipping retry",
+                    other_dials_count
                 );
-
-                self.metrics.increment_total_failed_dials();
-
-                // For bootstrap nodes, clear the done_on flag so they can be retried
-                // by the periodic timer. We check and clear by address since bootstrap
-                // nodes may not have peer_id
-                let is_bootstrap = self.bootstrap_nodes.iter().any(|(_, addrs)| {
-                    dial_data
-                        .listen_addrs()
-                        .iter()
-                        .any(|dial_addr| addrs.contains(dial_addr))
-                });
-
-                if is_bootstrap {
-                    // Clear done_on by address
-                    for addr in dial_data.listen_addrs() {
-                        self.controller
-                            .dial
-                            .remove_done_on(&crate::controller::PeerData::Multiaddr(addr));
-                    }
-                    debug!(
-                        "Cleared dial history for bootstrap node addrs={:?} - will be retried by timer",
-                        dial_data.listen_addrs()
-                    );
-                }
-
+                self.controller.dial.remove_in_progress(&connection_id);
                 self.make_extension_step(swarm);
+                return;
             }
+        }
+
+        // Remove from in_progress since we're going to retry
+        let mut dial_data = self
+            .controller
+            .dial
+            .remove_in_progress(&connection_id)
+            .unwrap();
+
+        if dial_data.retry.count() < self.config.dial_max_retries {
+            // Retry dialing after a delay
+            dial_data.retry.inc_count();
+
+            let next_delay = dial_data.retry.next_delay();
+
+            self.controller
+                .dial
+                .add_to_queue(dial_data.clone(), Some(next_delay));
+        } else {
+            // No more trials left
+            error!(
+                "Failed to dial peer {:?} at {:?} after {} trials",
+                dial_data.peer_id(),
+                dial_data.listen_addrs(),
+                dial_data.retry.count(),
+            );
+
+            self.metrics.increment_total_failed_dials();
+
+            // For bootstrap nodes, clear the done_on flag so they can be retried
+            // by the periodic timer. We check and clear by address since bootstrap
+            // nodes may not have peer_id
+            let is_bootstrap = self.bootstrap_nodes.iter().any(|(_, addrs)| {
+                dial_data
+                    .listen_addrs()
+                    .iter()
+                    .any(|dial_addr| addrs.contains(dial_addr))
+            });
+
+            if is_bootstrap {
+                // Clear done_on by address
+                for addr in dial_data.listen_addrs() {
+                    self.controller
+                        .dial
+                        .remove_done_on(&crate::controller::PeerData::Multiaddr(addr));
+                }
+                debug!(
+                    "Cleared dial history for bootstrap node addrs={:?} - will be retried by timer",
+                    dial_data.listen_addrs()
+                );
+            }
+
+            self.make_extension_step(swarm);
         }
     }
 

@@ -1,6 +1,45 @@
 #!/bin/bash
 
+# Accept optional docker-compose file as argument
+# If not provided, auto-detect which compose file has running containers
+if [ -z "$1" ]; then
+    # Try each compose file to find running nodes
+    for cf in docker-compose-sentry.yml docker-compose-multi-network.yml docker-compose.yml; do
+        if docker compose -f "$cf" ps 2>/dev/null | grep -q "Up"; then
+            COMPOSE_FILE="$cf"
+            break
+        fi
+    done
+    # Default to docker-compose.yml if nothing found
+    COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+else
+    COMPOSE_FILE="$1"
+fi
+
 echo "Socket Analysis - $(date)"
+echo "Docker Compose File: $COMPOSE_FILE"
+echo ""
+
+# Auto-detect running nodes by checking which ones are up
+RUNNING_NODES=""
+for node in node0 node1 node2 node3 node4 node5 node6 node7; do
+    if docker compose -f "$COMPOSE_FILE" ps $node 2>/dev/null | grep -q "Up"; then
+        RUNNING_NODES="$RUNNING_NODES $node"
+    fi
+done
+
+# If no nodes detected, fall back to default based on compose file
+if [ -z "$RUNNING_NODES" ]; then
+    if [[ "$COMPOSE_FILE" == *"sentry"* ]]; then
+        NODES="node0 node1 node2 node3 node4 node5 node6 node7"
+    else
+        NODES="node0 node1 node2 node3"
+    fi
+else
+    NODES="$RUNNING_NODES"
+fi
+
+echo "Checking nodes:$NODES"
 echo ""
 
 # Summary table
@@ -8,9 +47,9 @@ echo "Socket counts per node (ports 27000-27003 only):"
 echo "Node     | Total | ESTABLISHED | LISTEN | TIME_WAIT | CLOSE_WAIT | Other"
 echo "---------|-------|-------------|--------|-----------|------------|-------"
 
-for node in node0 node1 node2 node3; do
-    if docker compose ps $node 2>/dev/null | grep -q "Up"; then
-        raw_output=$(docker compose exec -T $node cat /proc/net/tcp 2>/dev/null | tail -n +2 || echo "")
+for node in $NODES; do
+    if docker compose -f $COMPOSE_FILE ps $node 2>/dev/null | grep -q "Up"; then
+        raw_output=$(docker compose -f $COMPOSE_FILE exec -T $node cat /proc/net/tcp 2>/dev/null | tail -n +2 || echo "")
         
         if [ ! -z "$raw_output" ] && [ "$(echo "$raw_output" | wc -l)" -gt 1 ]; then
             filtered_output=$(echo "$raw_output" | grep -E ":6978|:6979|:697A|:697B" || echo "")
@@ -37,13 +76,13 @@ done
 echo ""
 
 # Detailed connections per node
-for node in node0 node1 node2 node3; do
-    if docker compose ps $node 2>/dev/null | grep -q "Up"; then
+for node in $NODES; do
+    if docker compose -f $COMPOSE_FILE ps $node 2>/dev/null | grep -q "Up"; then
         echo "$node connections:"
         
         # Collect all connections in a temp file for sorting
         temp_file=$(mktemp)
-        docker compose exec -T $node cat /proc/net/tcp 2>/dev/null | tail -n +2 | grep -E ":6978|:6979|:697A|:697B" | while read -r line; do
+        docker compose -f $COMPOSE_FILE exec -T $node cat /proc/net/tcp 2>/dev/null | tail -n +2 | grep -E ":6978|:6979|:697A|:697B" | while read -r line; do
             local_addr=$(echo $line | awk '{print $2}')
             remote_addr=$(echo $line | awk '{print $3}')
             state=$(echo $line | awk '{print $4}')
@@ -90,6 +129,14 @@ for node in node0 node1 node2 node3; do
                     "172.20.0.11") peer="→node1"; sort_key="2";;
                     "172.20.0.12") peer="→node2"; sort_key="3";;
                     "172.20.0.13") peer="→node3"; sort_key="4";;
+                    # Sentry testnet IPs - Private Network B (172.24.0.x)
+                    "172.24.0.14") peer="→node4"; sort_key="5";;
+                    "172.24.0.15") peer="→node5"; sort_key="6";;
+                    "172.24.0.16") peer="→node6"; sort_key="7";;
+                    "172.24.0.17") peer="→node7"; sort_key="8";;
+                    # Sentry testnet IPs - Public Network (10.0.0.x)
+                    "10.0.0.3") peer="→node3"; sort_key="4";;
+                    "10.0.0.7") peer="→node7"; sort_key="8";;
                     # Multi-network testnet IPs (172.21.0.x validators internal)
                     "172.21.0.10") peer="→node0"; sort_key="1";;
                     "172.21.0.11") peer="→node1"; sort_key="2";;
@@ -124,10 +171,10 @@ for node in node0 node1 node2 node3; do
 done
 
 # Monitor mode
-if [ "$1" = "monitor" ]; then
+if [ "$2" = "monitor" ]; then
     while true; do
         clear
-        $0  # Call itself without monitor argument
+        $0 "$COMPOSE_FILE"  # Call itself with the compose file argument
         echo "Next update in 5 seconds... (Ctrl+C to stop)"
         sleep 5
     done

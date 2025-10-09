@@ -97,6 +97,15 @@ where
     fn cleanup_peer_on_disconnect(&mut self, peer_id: PeerId) {
         let peer_info = self.discovered_peers.remove(&peer_id);
 
+        if let Some(info) = &peer_info {
+            debug!(
+                "Removed peer {} from discovered_peers (addrs: {:?}), remaining: {} peers",
+                peer_id,
+                info.listen_addrs,
+                self.discovered_peers.len()
+            );
+        }
+
         // Find and reset the bootstrap node peer_id to allow re-identification
         // This handles the case where a bootstrap node restarts with a different peer_id
         for bootstrap_node in self.bootstrap_nodes.iter_mut() {
