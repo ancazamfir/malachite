@@ -39,6 +39,14 @@ num_inbound_peers = 20
 max_connections_per_peer = 5
 ephemeral_connection_timeout = "5s"
 
+[consensus.p2p.relay]
+enabled = true
+mode = "both"
+# node3 (sentry in network A) - will get peer ID via identify
+relay_servers = [
+    "/ip4/10.0.0.3/tcp/27000",
+]
+
 [consensus.p2p.protocol]
 type = "gossipsub"
 mesh_n = 6

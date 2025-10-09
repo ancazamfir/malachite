@@ -236,5 +236,6 @@ fn make_gossip_config(cfg: &ConsensusConfig) -> NetworkConfig {
             discovery_regres: cfg.p2p.protocol_names.discovery_regres.clone(),
             sync: cfg.p2p.protocol_names.sync.clone(),
         },
+        relay: cfg.p2p.relay.clone(),
     }
 }

@@ -52,6 +52,7 @@ where
     selector: Box<dyn Selector<C>>,
 
     bootstrap_nodes: Vec<(Option<PeerId>, Vec<Multiaddr>)>,
+    relay_servers: Vec<(Option<PeerId>, Vec<Multiaddr>)>,
     discovered_peers: HashMap<PeerId, identify::Info>,
     active_connections: HashMap<PeerId, Vec<ConnectionId>>,
     outbound_peers: HashMap<PeerId, OutboundState>,
@@ -65,7 +66,12 @@ impl<C> Discovery<C>
 where
     C: DiscoveryClient,
 {
-    pub fn new(config: Config, bootstrap_nodes: Vec<Multiaddr>, registry: &mut Registry) -> Self {
+    pub fn new(
+        config: Config,
+        bootstrap_nodes: Vec<Multiaddr>,
+        relay_servers: Vec<Multiaddr>,
+        registry: &mut Registry,
+    ) -> Self {
         info!(
             "Discovery is {}",
             if config.enabled {
@@ -74,6 +80,14 @@ where
                 "disabled"
             }
         );
+
+        if !relay_servers.is_empty() {
+            info!(
+                "Configured {} relay server(s): {:?}",
+                relay_servers.len(),
+                relay_servers
+            );
+        }
 
         let state = if config.enabled && bootstrap_nodes.is_empty() {
             warn!("No bootstrap nodes provided");
@@ -109,6 +123,10 @@ where
 
             bootstrap_nodes: bootstrap_nodes
                 .clone()
+                .into_iter()
+                .map(|addr| (None, vec![addr]))
+                .collect(),
+            relay_servers: relay_servers
                 .into_iter()
                 .map(|addr| (None, vec![addr]))
                 .collect(),

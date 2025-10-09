@@ -6,7 +6,7 @@ use libp2p::kad::{Addresses, KBucketKey, KBucketRef};
 use libp2p::request_response::{OutboundRequestId, ResponseChannel};
 use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::swarm::NetworkBehaviour;
-use libp2p::{gossipsub, identify, ping};
+use libp2p::{dcutr, gossipsub, identify, ping, relay};
 pub use libp2p::{Multiaddr, PeerId};
 use libp2p_broadcast as broadcast;
 
@@ -23,6 +23,8 @@ pub enum NetworkEvent {
     Broadcast(broadcast::Event),
     Sync(sync::Event),
     Discovery(Box<discovery::NetworkEvent>),
+    Relay(Box<relay::Event>),
+    Dcutr(dcutr::Event),
 }
 
 impl From<identify::Event> for NetworkEvent {
@@ -61,6 +63,18 @@ impl From<discovery::NetworkEvent> for NetworkEvent {
     }
 }
 
+impl From<relay::Event> for NetworkEvent {
+    fn from(event: relay::Event) -> Self {
+        Self::Relay(Box::new(event))
+    }
+}
+
+impl From<dcutr::Event> for NetworkEvent {
+    fn from(event: dcutr::Event) -> Self {
+        Self::Dcutr(event)
+    }
+}
+
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "NetworkEvent")]
 pub struct Behaviour {
@@ -70,6 +84,8 @@ pub struct Behaviour {
     pub broadcast: Toggle<broadcast::Behaviour>,
     pub sync: Toggle<sync::Behaviour>,
     pub discovery: Toggle<discovery::Behaviour>,
+    pub relay: Toggle<relay::Behaviour>,
+    pub dcutr: Toggle<dcutr::Behaviour>,
 }
 
 /// Dummy implementation of Debug for Behaviour.
@@ -209,6 +225,28 @@ impl Behaviour {
             None
         };
 
+        // Enable relay if relay is enabled (works for both server and client modes)
+        let relay = if config.relay.enabled {
+            Some(relay::Behaviour::new(
+                keypair.public().to_peer_id(),
+                relay::Config::default(),
+            ))
+        } else {
+            None
+        };
+
+        // Enable dcutr (hole punching) if relay is enabled and mode is Client or Both
+        let dcutr = if config.relay.enabled
+            && matches!(
+                config.relay.mode,
+                malachitebft_config::RelayMode::Client | malachitebft_config::RelayMode::Both
+            )
+        {
+            Some(dcutr::Behaviour::new(keypair.public().to_peer_id()))
+        } else {
+            None
+        };
+
         Ok(Self {
             identify,
             ping,
@@ -216,6 +254,8 @@ impl Behaviour {
             gossipsub: Toggle::from(gossipsub),
             broadcast: Toggle::from(broadcast),
             discovery: Toggle::from(discovery),
+            relay: Toggle::from(relay),
+            dcutr: Toggle::from(dcutr),
         })
     }
 }

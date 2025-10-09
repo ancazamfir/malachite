@@ -121,6 +121,52 @@ where
         false
     }
 
+    /// Update relay server with peer_id if this peer matches a relay server's addresses
+    ///
+    /// This function checks if a discovered peer corresponds to one of the configured
+    /// relay servers (initially configured with addresses but peer_id = None).
+    /// When a match is found, the relay server entry is updated with the peer's ID.
+    ///
+    /// Returns true if the peer was identified as a relay server.
+    fn update_relay_server_peer_id(&mut self, peer_id: PeerId, listen_addrs: &[Multiaddr]) -> bool {
+        debug!(
+            "Checking peer {} against {} relay servers",
+            peer_id,
+            self.relay_servers.len()
+        );
+
+        // Skip if peer is already identified (avoid duplicate work)
+        if self
+            .relay_servers
+            .iter()
+            .any(|(existing_peer_id, _)| existing_peer_id == &Some(peer_id))
+        {
+            debug!(
+                "Peer {} already identified as relay server - skipping",
+                peer_id
+            );
+            return false;
+        }
+
+        // Match addresses against relay server configurations
+        for (maybe_peer_id, relay_addrs) in self.relay_servers.iter_mut() {
+            // Check if this relay server is unidentified and addresses match
+            if maybe_peer_id.is_none()
+                && listen_addrs
+                    .iter()
+                    .any(|listen_addr| relay_addrs.contains(listen_addr))
+            {
+                // Relay server discovered: None -> Some(peer_id)
+                info!("Relay server {} successfully identified at {:?}", peer_id, relay_addrs);
+                *maybe_peer_id = Some(peer_id);
+                return true; // Indicate this was a relay server
+            }
+        }
+
+        debug!("Peer {} is not a configured relay server", peer_id);
+        false
+    }
+
     pub fn handle_new_peer(
         &mut self,
         swarm: &mut Swarm<C>,
@@ -145,8 +191,24 @@ where
             peer_id, info.listen_addrs
         );
 
+        // Filter loopback addresses from the peer's advertised addresses
+        let filtered_addrs = filter_loopback_addresses(&info.listen_addrs, &peer_id);
+
         // Match peer against bootstrap nodes
         let was_identified_as_bootstrap = self.update_bootstrap_node_peer_id(peer_id);
+
+        // Match peer against relay servers and listen on relay circuit if identified
+        let is_relay_server = self.update_relay_server_peer_id(peer_id, &filtered_addrs);
+        if is_relay_server {
+            // Listen on the relay circuit to establish a reservation
+            let relay_addr = format!("/p2p/{}/p2p-circuit", peer_id)
+                .parse()
+                .expect("Valid relay address");
+            info!("Listening on relay circuit via {}", peer_id);
+            if let Err(e) = swarm.listen_on(relay_addr) {
+                warn!("Failed to listen on relay circuit: {}", e);
+            }
+        }
 
         if self
             .controller
@@ -158,9 +220,6 @@ where
             self.controller
                 .dial_remove_matching_in_progress_connections(&peer_id);
         }
-
-        // Filter loopback addresses from the peer's advertised addresses
-        let filtered_addrs = filter_loopback_addresses(&info.listen_addrs, &peer_id);
 
         let filtered_info = identify::Info {
             listen_addrs: filtered_addrs,

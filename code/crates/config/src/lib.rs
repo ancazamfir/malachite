@@ -30,6 +30,50 @@ impl Default for ProtocolNames {
     }
 }
 
+/// Relay mode configuration
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RelayMode {
+    /// Node acts as a relay server (for sentry nodes)
+    Server,
+    /// Node acts as a relay client (for validators behind NAT)
+    Client,
+    /// Node acts as both server and client
+    Both,
+}
+
+impl Default for RelayMode {
+    fn default() -> Self {
+        Self::Client
+    }
+}
+
+/// Relay configuration for NAT traversal and hole punching
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RelayConfig {
+    /// Enable relay functionality
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Relay mode (server, client, or both)
+    #[serde(default)]
+    pub mode: RelayMode,
+
+    /// For clients: list of relay server addresses to use
+    #[serde(default)]
+    pub relay_servers: Vec<Multiaddr>,
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: RelayMode::Client,
+            relay_servers: Vec::new(),
+        }
+    }
+}
+
 /// P2P configuration options
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct P2pConfig {
@@ -55,6 +99,10 @@ pub struct P2pConfig {
     /// Protocol name configuration
     #[serde(default)]
     pub protocol_names: ProtocolNames,
+
+    /// Relay configuration for NAT traversal
+    #[serde(default)]
+    pub relay: RelayConfig,
 }
 
 impl Default for P2pConfig {
@@ -67,6 +115,7 @@ impl Default for P2pConfig {
             rpc_max_size: ByteSize::mib(10),
             pubsub_max_size: ByteSize::mib(4),
             protocol_names: Default::default(),
+            relay: Default::default(),
         }
     }
 }

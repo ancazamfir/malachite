@@ -7,7 +7,7 @@ use futures::StreamExt;
 use libp2p::metrics::{Metrics, Recorder};
 use libp2p::request_response::{InboundRequestId, OutboundRequestId};
 use libp2p::swarm::{self, SwarmEvent};
-use libp2p::{gossipsub, identify, quic, SwarmBuilder};
+use libp2p::{dcutr, gossipsub, identify, quic, relay, SwarmBuilder};
 use libp2p_broadcast as broadcast;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, error_span, info, trace, warn, Instrument};
@@ -116,6 +116,7 @@ pub struct Config {
     pub enable_consensus: bool,
     pub enable_sync: bool,
     pub protocol_names: ProtocolNames,
+    pub relay: malachitebft_config::RelayConfig,
 }
 
 impl Config {
@@ -235,8 +236,21 @@ pub async fn spawn(
     let (tx_event, rx_event) = mpsc::channel(32);
     let (tx_ctrl, rx_ctrl) = mpsc::channel(32);
 
+    if !config.relay.relay_servers.is_empty() {
+        info!(
+            "Network: passing {} relay server(s) to discovery: {:?}",
+            config.relay.relay_servers.len(),
+            config.relay.relay_servers
+        );
+    }
+
     let discovery = registry.with_prefix(DISCOVERY_METRICS_PREFIX, |reg| {
-        discovery::Discovery::new(config.discovery, config.persistent_peers.clone(), reg)
+        discovery::Discovery::new(
+            config.discovery,
+            config.persistent_peers.clone(),
+            config.relay.relay_servers.clone(),
+            reg,
+        )
     });
 
     let state = State::new(discovery);
@@ -586,12 +600,53 @@ async fn handle_swarm_event(
             state.discovery.on_network_event(swarm, *network_event);
         }
 
+        SwarmEvent::Behaviour(NetworkEvent::Relay(event)) => {
+            handle_relay_event(*event);
+        }
+
+        SwarmEvent::Behaviour(NetworkEvent::Dcutr(event)) => {
+            handle_dcutr_event(event);
+        }
+
         swarm_event => {
             metrics.record(&swarm_event);
         }
     }
 
     ControlFlow::Continue(())
+}
+
+fn handle_relay_event(event: relay::Event) {
+    use relay::Event;
+    match event {
+        Event::ReservationReqAccepted { src_peer_id, .. } => {
+            info!("Relay reservation accepted by {src_peer_id}");
+        }
+        Event::ReservationReqDenied { src_peer_id, .. } => {
+            warn!("Relay reservation denied by {src_peer_id}");
+        }
+        Event::ReservationTimedOut { src_peer_id } => {
+            debug!("Relay reservation timed out for {src_peer_id}");
+        }
+        Event::CircuitReqDenied { src_peer_id, dst_peer_id, status: _ } => {
+            debug!("Relay circuit denied from {src_peer_id} to {dst_peer_id}");
+        }
+        Event::CircuitReqAccepted { src_peer_id, dst_peer_id } => {
+            info!("Relay circuit established from {src_peer_id} to {dst_peer_id}");
+        }
+        Event::CircuitClosed { src_peer_id, dst_peer_id, error } => {
+            debug!("Relay circuit closed between {src_peer_id} and {dst_peer_id}: {error:?}");
+        }
+        // Handle other variants that may exist
+        _ => {
+            debug!("Relay event: {event:?}");
+        }
+    }
+}
+
+fn handle_dcutr_event(event: dcutr::Event) {
+    // dcutr::Event is an associated type from the behaviour, just log it for now
+    debug!("DCUtR event: {event:?}");
 }
 
 async fn handle_gossipsub_event(
