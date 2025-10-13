@@ -1,4 +1,4 @@
-use libp2p::{identify, swarm::ConnectionId, PeerId, Swarm};
+use libp2p::{identify, swarm::ConnectionId, Multiaddr, PeerId, Swarm};
 use tracing::{debug, info, warn};
 
 use crate::addr_filter;
@@ -160,14 +160,22 @@ where
             peer_id, info.listen_addrs
         );
 
-        // Filter loopback addresses from the peer's advertised addresses
-        let filtered_addrs = filter_loopback_addresses(&info.listen_addrs, &peer_id);
+        // Filter loopback addresses for relay server matching (simple filter)
+        let non_loopback_addrs: Vec<_> = info
+            .listen_addrs
+            .iter()
+            .filter(|addr| {
+                let addr_str = addr.to_string();
+                !addr_str.contains("127.0.0.1") && !addr_str.contains("::1")
+            })
+            .cloned()
+            .collect();
 
         // Match peer against bootstrap nodes
         let was_identified_as_bootstrap = self.update_bootstrap_node_peer_id(peer_id);
 
         // Match peer against relay servers and listen on relay circuit if identified
-        let is_relay_server = self.update_relay_server_peer_id(peer_id, &filtered_addrs);
+        let is_relay_server = self.update_relay_server_peer_id(peer_id, &non_loopback_addrs);
         if is_relay_server {
             // Listen on the relay circuit to establish a reservation
             let relay_addr = format!("/p2p/{}/p2p-circuit", peer_id)
