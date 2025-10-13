@@ -8,6 +8,8 @@ use libp2p::{identify, kad, request_response, swarm::ConnectionId, Multiaddr, Pe
 
 mod util;
 
+mod addr_filter;
+
 mod behaviour;
 pub use behaviour::*;
 

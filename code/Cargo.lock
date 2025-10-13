@@ -2284,6 +2284,7 @@ dependencies = [
  "either",
  "eyre",
  "informalsystems-malachitebft-metrics",
+ "ipnet",
  "libp2p",
  "rand 0.8.5",
  "serde",
