@@ -197,12 +197,28 @@ where
 }
 
 fn make_gossip_config(cfg: &ConsensusConfig) -> NetworkConfig {
+    use malachitebft_network::{BootstrapProtocol, Selector};
+    
     NetworkConfig {
         listen_addr: cfg.p2p.listen_addr.clone(),
         persistent_peers: cfg.p2p.persistent_peers.clone(),
         discovery: DiscoveryConfig {
             enabled: cfg.p2p.discovery.enabled,
-            ..Default::default()
+            bootstrap_protocol: match cfg.p2p.discovery.bootstrap_protocol {
+                crate::config::BootstrapProtocol::Kademlia => BootstrapProtocol::Kademlia,
+                crate::config::BootstrapProtocol::Full => BootstrapProtocol::Full,
+            },
+            selector: match cfg.p2p.discovery.selector {
+                crate::config::Selector::Kademlia => Selector::Kademlia,
+                crate::config::Selector::Random => Selector::Random,
+            },
+            num_outbound_peers: cfg.p2p.discovery.num_outbound_peers,
+            num_inbound_peers: cfg.p2p.discovery.num_inbound_peers,
+            max_connections_per_peer: cfg.p2p.discovery.max_connections_per_peer,
+            ephemeral_connection_timeout: cfg.p2p.discovery.ephemeral_connection_timeout,
+            dial_max_retries: 5,
+            request_max_retries: 5,
+            connect_request_max_retries: 0,
         },
         idle_connection_timeout: Duration::from_secs(15 * 60),
         transport: malachitebft_network::TransportProtocol::from_multiaddr(&cfg.p2p.listen_addr)
