@@ -198,7 +198,7 @@ where
 
 fn make_gossip_config(cfg: &ConsensusConfig) -> NetworkConfig {
     use malachitebft_network::{BootstrapProtocol, Selector};
-    
+
     NetworkConfig {
         listen_addr: cfg.p2p.listen_addr.clone(),
         persistent_peers: cfg.p2p.persistent_peers.clone(),

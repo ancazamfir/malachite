@@ -16,11 +16,35 @@ Each scenario validates that the bootstrap identification logic correctly uses `
 | Testnet Scenario | Full Discovery | Kademlia Discovery | Notes |
 |-----------------|----------------|-------------------|-------|
 | `make testnet` | ✅ Working | ✅ Working | |
-| `make testnet` + restart validators | ✅ Working  | ✅ Working  | |
+| `make testnet` + restart validators | ❌ Broken  | ✅ Working  | failure for full - (2) |
 | `make testnet-multi` | ✅ Working | ✅ Working |  |
-| `make testnet-multi` + restart validators | ❌ Broken |  ❌ Broken | after restart node3 only connected to node0 |
-| `make testnet-nat` | ❌ Broken | ❌ Broken |  |
-| `make testnet-nat` + restart validators | ❌ Broken | ❌ Broken |  |
+| `make testnet-multi` + restart validators | ❌ Broken |  ✅ Working | failure for full (2) |
+| `make testnet-nat` | ❌ Broken | ❌ Broken | libp2p-relay |
+| `make testnet-nat` + restart validators | ❌ Broken | ❌ Broken | libp2p-relay |
+| `make testnet-sentry` | ✅ Working | ❌ Broken | syn_sent for kad - (1) |
+| `make testnet-sentry` + restart validators | ❌ Broken  | ❌ Broken  | failures for full - (2) kad - (1) |
+
+Notes:
+1. Kademlia has to run in Server mode, so it actively maintains the DHT routing table by auto-dialing peers discovered through DHT queries. This is standard for DHT nodes, but it means Kademlia will dial unreachable addresses from the routing table.
+
+   The issue is that Rust-libp2p doesn't have a `ConnectionGater` interface (like Go-libp2p) to intercept and reject dial attempts. The filtering added only works for the application-level selection logic, not for Kademlia's internal DHT maintenance. The result is that we end up with dial attempts to unreachable addresses, for example see node7 the dial attempts to nodes in the remote cluster:
+```
+node7 connections:
+  LISTEN on port 27000
+  172.24.0.17:27000 → 172.20.0.10:27000 [SYN_SENT] →node0
+  172.24.0.17:27000 → 172.20.0.11:27000 [SYN_SENT] →node1
+  172.24.0.17:27000 → 172.20.0.12:27000 [SYN_SENT] →node2
+  10.0.0.7:27000 → 10.0.0.3:44102 [ESTABLISHED] →node3
+  10.0.0.7:43942 → 10.0.0.3:27000 [ESTABLISHED] →node3
+  172.24.0.17:27000 → 172.24.0.14:51184 [ESTABLISHED] →node4
+  172.24.0.17:54456 → 172.24.0.14:27000 [ESTABLISHED] →node4
+  172.24.0.17:27000 → 172.24.0.15:42666 [ESTABLISHED] →node5
+  172.24.0.17:45466 → 172.24.0.15:27000 [ESTABLISHED] →node5
+  172.24.0.17:27000 → 172.24.0.16:55776 [ESTABLISHED] →node6
+  172.24.0.17:57010 → 172.24.0.16:27000 [ESTABLISHED] →node6
+```
+
+2. Full discovery mode doesn't have periodic rediscovery. After simultaneous validator restarts, there's a race condition: when nodes connect to their bootstrap peer (node0) and immediately send PeersRequest, the identify protocol hasn't completed yet for other newly connected peers. This causes nodes to miss discovering each other. Unlike Kademlia which has libp2p's built-in `periodic_bootstrap_interval` (every 5s), Full mode only triggers rediscovery on bootstrap peer reconnects. Without periodic PeersRequest, nodes never discover the peers they missed in the initial race. Consensus still works (messages relay through node0), but the topology is suboptimal.
 
 **Legend:**
 - ✅ Working - Tested and functioning correctly
@@ -296,39 +320,38 @@ PRIVATE NETWORK A        PUBLIC NETWORK           PRIVATE NETWORK B
 
 +------------------+     +------------------+     +------------------+
 |      node0       |<--->|                  |<--->|      node4       |
-| 172.20.0.10      |     |                  |     | 172.21.0.14      |
+| 172.20.0.10      |     |                  |     | 172.24.0.14      |
 | (validator)      |     |                  |     | (validator)      |
 +------------------+     |                  |     +------------------+
                          |                  |
 +------------------+     |                  |     +------------------+
 |      node1       |<--->|                  |<--->|      node5       |
-| 172.20.0.11      |     |     node3        |     | 172.21.0.15      |
+| 172.20.0.11      |     |     node3        |     | 172.24.0.15      |
 | (validator)      |     |  (sentry A)      |     | (validator)      |
 +------------------+     | 172.20.0.13      |     +------------------+
                          | 10.0.0.3         |
 +------------------+     |       ◄──────►   |     +------------------+
 |      node2       |<--->|                  |<--->|      node6       |
-| 172.20.0.12      |     |     node7        |     | 172.21.0.16      |
+| 172.20.0.12      |     |     node7        |     | 172.24.0.16      |
 | (fullnode)       |     |  (sentry B)      |     | (fullnode)       |
-+------------------+     | 172.21.0.17      |     +------------------+
++------------------+     | 172.24.0.17      |     +------------------+
                          | 10.0.0.7         |
 +------------------+     |                  |     +------------------+
 |      node3       |<--->|                  |<--->|      node7       |
-| 172.20.0.13      |     +------------------+     | 172.21.0.17      |
+| 172.20.0.13      |     +------------------+     | 172.24.0.17      |
 | (sentry)         |                              | (sentry)         |
 | 10.0.0.3         |                              | 10.0.0.7         |
 +------------------+                              +------------------+
 
 Network Isolation:
-• Validators (0,1,4,5) ONLY connect to their local sentry
-• Full nodes (2,6) ONLY connect to their local sentry
-• Sentries (3,7) connect to local validators AND remote sentry
-• No direct validator-to-validator connections across networks
+• Nodes (1,2,3) connect to node 0
+• Nodes (5,6,7) connect to node 5
+• Sentries (3,7) connect to remote sentry
 
 ADDRESS ROUTING:
 • node0 -> node3 (private A): 172.20.0.13
 • node3 -> node7 (public): 10.0.0.7
-• node7 -> node4 (private B): 172.21.0.14
+• node7 -> node4 (private B): 172.24.0.14
 ```
 
 ### Connection Flow for node3 -> node1
@@ -350,7 +373,7 @@ node3 (sentry A)
   ↓ (public_net)
 node7 (sentry B)
  10.0.0.7 (public interface)
- 172.21.0.17 (private interface)
+ 172.24.0.17 (private interface)
 ```
 
 **Message Flow (node0 -> node4):**
@@ -367,18 +390,18 @@ node4 (validator, network B)
 On connection establishment, each node gets appropriate addresses:
 - node0 sees: node3 at `172.20.0.13` (reachable via private A)
 - node3 sees: node7 at `10.0.0.7` (reachable via public)
-- node7 sees: node4 at `172.21.0.14` (reachable via private B)
+- node7 sees: node4 at `172.24.0.14` (reachable via private B)
 
 ### Configuration:
 - **Docker Compose**: `docker-compose-sentry.yml`
 - **Networks**:
   - `private_net_a` (172.20.0.0/24) - Validator cluster A
-  - `private_net_b` (172.21.0.0/24) - Validator cluster B
+  - `private_net_b` (172.24.0.0/24) - Validator cluster B
   - `public_net` (10.0.0.0/24) - Sentry interconnect
 - **Configs**: `sentry-configs/`
-- **Validator Count**: 4 (node0, node1, node4, node5)
+- **Validator Count**: 4 (node0, node1, node2, node4, node5, node6)
 - **Sentry Nodes**: 2 (node3, node7)
-- **Full Nodes**: 2 (node2, node6)
+
 
 ### Key Features:
 
@@ -421,18 +444,22 @@ On connection establishment, each node gets appropriate addresses:
 ### Commands:
 ```bash
 make testnet          # Single network + host IP scenario
+make testnet-down
 make testnet-multi    # Multi-network address mismatch
 make testnet-nat      # True NAT with gateway
+make testnet-nat-down
+make testnet-sentry   # Sentry network architecture with two validator clusters
+make testnet-sentry-down
 make test-integration # Run basic integration test, starts network, checks sockets, restarts validators 0..2
 ```
 
 ### Network Analysis:
 ```bash
 # Check socket connections for any running testnet
-./makefile-scripts/check-socket-leaks-simple.sh
+./makefile-scripts/monitor-sockets.sh
 
 # Monitor socket connections for any running testnet
-./makefile-scripts/check-socket-leaks-simple.sh monitor
+./makefile-scripts/monitor-sockets.sh monitor
 
 # View logs for specific scenarios
 docker compose logs node3 --follow                             # Standard testnet
@@ -444,12 +471,15 @@ docker compose -f docker-compose-nat.yml logs node3            # NAT scenario
 ```
 code/
 ├── makefile-scripts/          # Scripts for testnet setup and monitoring
+├── sentry-configs/            # Sentry network scenario
 ├── single-network-configs/    # Standard single network scenario
 ├── multi-net-configs/         # Multi-network address mismatch
 ├── nat-configs/               # True NAT with gateway
 ├── docker-compose.yml         # Standard testnet
 ├── docker-compose-multi-network.yml # Multi network testnet
 └── docker-compose-nat.yml     # NAT testnet
+└── docker-compose-sentry.yml     # NAT testnet
+
 ```
 
 

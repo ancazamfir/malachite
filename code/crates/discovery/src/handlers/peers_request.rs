@@ -7,6 +7,7 @@ use libp2p::{
 use tracing::{debug, error, trace};
 
 use crate::{
+    addr_filter,
     behaviour::{self, Response},
     dial::DialData,
     request::RequestData,
@@ -86,18 +87,28 @@ where
         }
     }
 
+    /// Handle a successful response to a peers request (Full discovery mode)
+    ///
+    /// This is called when we receive a list of peers from a node we queried.
+    /// The flow is:
+    ///  - mark the request as complete (remove from in-progress tracking)
+    ///  - process the received peers filter unreachable addresses and queue them for dialing
+    ///  - trigger the extension step to continue discovery with newly found peers
     pub(crate) fn handle_peers_response(
         &mut self,
         swarm: &mut Swarm<C>,
         request_id: OutboundRequestId,
         peers: HashSet<(Option<PeerId>, Vec<Multiaddr>)>,
     ) {
+        // Mark this request as complete
         self.controller
             .peers_request
             .remove_in_progress(&request_id);
 
+        // Filter and queue newly discovered peers for dialing
         self.process_received_peers(swarm, peers);
 
+        // Continue discovery, send requests to newly discovered peers to expand our peer set
         self.make_extension_step(swarm);
     }
 
@@ -133,13 +144,54 @@ where
         }
     }
 
+    /// Process peers received from a peers request/response
+    ///
+    /// This function filters peer addresses based on network reachability and queues
+    /// reachable peers for dialing. It handles multi-homed nodes by checking if peer
+    /// addresses are reachable from ANY of our local network interfaces.
+    ///
+    /// Filtering rules:
+    /// - remove loopback addresses (unless that's all the peer has, for local testing)
+    /// - for private IPs only keep addresses in the same /16 subnet as one of our IPs
+    /// - for public nodes filter out all private peer addresses
+    /// - for private nodes keep public peer addresses (they can reach public nodes)
     fn process_received_peers(
         &mut self,
         swarm: &mut Swarm<C>,
         peers: HashSet<(Option<PeerId>, Vec<Multiaddr>)>,
     ) {
-        for (peer_id, listen_addr) in peers {
-            self.add_to_dial_queue(swarm, DialData::new(peer_id, listen_addr));
+        // Get ALL our addresses for filtering (handles multi-homed nodes)
+        // Includes both external addresses and listener addresses
+        let own_addrs: Vec<_> = swarm
+            .external_addresses()
+            .chain(swarm.listeners())
+            .cloned()
+            .collect();
+
+        for (peer_id, listen_addrs) in peers {
+            let peer_info = peer_id
+                .as_ref()
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            // Filter addresses: keep only those reachable from ANY of our local addresses
+            let filtered_addrs =
+                addr_filter::filter_reachable_addresses(&listen_addrs, &own_addrs, &peer_info);
+
+            if !filtered_addrs.is_empty() {
+                debug!(
+                    "Adding peer {} to dial queue with {} filtered addresses (from {})",
+                    peer_info,
+                    filtered_addrs.len(),
+                    listen_addrs.len()
+                );
+                self.add_to_dial_queue(swarm, DialData::new(peer_id, filtered_addrs));
+            } else {
+                debug!(
+                    "Filtered all addresses for peer {}, not adding to dial queue",
+                    peer_info
+                );
+            }
         }
     }
 

@@ -1,41 +1,10 @@
-use libp2p::{identify, swarm::ConnectionId, Multiaddr, PeerId, Swarm};
+use libp2p::{identify, swarm::ConnectionId, PeerId, Swarm};
 use tracing::{debug, info, warn};
 
+use crate::addr_filter;
 use crate::config::BootstrapProtocol;
 use crate::OutboundState;
 use crate::{request::RequestData, Discovery, DiscoveryClient, State};
-
-/// Filter out loopback addresses from a peer's advertised addresses.
-///
-/// Loopback addresses (127.0.0.1, ::1) are not dialable from remote nodes.
-/// However, if a peer only advertises loopback addresses (local setup scenario),
-/// they are preserved in order to maintain connectivity in single-machine environments.
-fn filter_loopback_addresses(addrs: &[Multiaddr], peer_id: &PeerId) -> Vec<Multiaddr> {
-    let non_loopback_addrs: Vec<_> = addrs
-        .iter()
-        .filter(|addr| {
-            let addr_str = addr.to_string();
-            !addr_str.contains("127.0.0.1") && !addr_str.contains("::1")
-        })
-        .cloned()
-        .collect();
-
-    if non_loopback_addrs.is_empty() {
-        // Peer only has loopback addresses (local setup) - keep them
-        addrs.to_vec()
-    } else {
-        // Peer has non-loopback addresses - use only those
-        if non_loopback_addrs.len() != addrs.len() {
-            debug!(
-                "Filtered loopback addresses for peer {}: {} -> {} addresses",
-                peer_id,
-                addrs.len(),
-                non_loopback_addrs.len()
-            );
-        }
-        non_loopback_addrs
-    }
-}
 
 impl<C> Discovery<C>
 where
@@ -159,8 +128,19 @@ where
                 .dial_remove_matching_in_progress_connections(&peer_id);
         }
 
-        // Filter loopback addresses from the peer's advertised addresses
-        let filtered_addrs = filter_loopback_addresses(&info.listen_addrs, &peer_id);
+        // Get ALL our addresses (external + listeners) for multi-homed filtering
+        let own_addrs: Vec<_> = swarm
+            .external_addresses()
+            .chain(swarm.listeners())
+            .cloned()
+            .collect();
+
+        // Filter peer addresses based on network reachability
+        let filtered_addrs = addr_filter::filter_reachable_addresses(
+            &info.listen_addrs,
+            &own_addrs,
+            &peer_id.to_string(),
+        );
 
         let filtered_info = identify::Info {
             listen_addrs: filtered_addrs,
@@ -278,12 +258,20 @@ where
                     self.make_extension_step(swarm);
                 }
             }
-            // Add the address to the Kademlia routing table
+            // Add the address to the Kademlia routing table (only if we have reachable addresses)
             if self.config.bootstrap_protocol == BootstrapProtocol::Kademlia {
-                swarm.behaviour_mut().add_address(
-                    &peer_id,
-                    filtered_info.listen_addrs.first().unwrap().clone(),
-                );
+                if let Some(addr) = filtered_info.listen_addrs.first() {
+                    debug!(
+                        "Adding peer {} address {} to Kademlia routing table",
+                        peer_id, addr
+                    );
+                    swarm.behaviour_mut().add_address(&peer_id, addr.clone());
+                } else {
+                    debug!(
+                        "Not adding peer {} to Kademlia routing table - no reachable addresses",
+                        peer_id
+                    );
+                }
             }
         } else {
             // If discovery is disabled, all peers are inbound. The

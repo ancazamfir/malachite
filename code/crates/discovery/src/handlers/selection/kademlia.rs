@@ -55,7 +55,11 @@ where
             .map(|(index, peers)| {
                 let filtered_peers = peers
                     .into_iter()
+                    // Filter by excluded peers
                     .filter(|peer_id| !excluded.contains(peer_id))
+                    // Only consider peers that have been discovered and filtered via identify
+                    // This prevents Kademlia DHT auto-discovered unreachable addresses from being dialed
+                    .filter(|peer_id| discovered.contains_key(peer_id))
                     .collect();
                 (index, filtered_peers)
             })
