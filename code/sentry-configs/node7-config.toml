@@ -23,8 +23,6 @@ queue_capacity = 100
 listen_addr = "/ip4/0.0.0.0/tcp/27000"
 persistent_peers = [
     "/ip4/172.24.0.14/tcp/27000",  # node4 (validator) private IP
-    "/ip4/172.24.0.15/tcp/27000",  # node5 (validator) private IP
-    "/ip4/172.24.0.16/tcp/27000",  # node6 (fullnode) private IP
     "/ip4/10.0.0.3/tcp/27000"      # node3 (sentry) public IP
 ]
 pubsub_max_size = "4.2 MB"
