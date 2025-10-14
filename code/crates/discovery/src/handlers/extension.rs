@@ -1,7 +1,7 @@
 use libp2p::{PeerId, Swarm};
 use tracing::{debug, info, warn};
 
-use crate::{request::RequestData, Discovery, DiscoveryClient, State};
+use crate::{config, request::RequestData, Discovery, DiscoveryClient, State};
 
 impl<C> Discovery<C>
 where
@@ -30,6 +30,16 @@ where
             "Initiating discovery extension with a target of {} peers",
             target
         );
+
+        // For Full mode, clear the "done" status for peers_request so we can query discovered peers again
+        // This allows rediscovery of new peers that may have joined since the last request.
+        // For Kademlia mode, we don't clear "done" status because the DHT handles periodic rediscovery.
+        if self.config.bootstrap_protocol == config::BootstrapProtocol::Full {
+            for peer_id in self.discovered_peers.keys() {
+                self.controller.peers_request.remove_done_on(peer_id);
+            }
+        }
+
         self.state = State::Extending(target);
         self.make_extension_step(swarm); // trigger extension
     }

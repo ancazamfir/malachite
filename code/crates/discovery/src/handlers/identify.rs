@@ -298,16 +298,26 @@ where
             && self.state == State::Idle
             && self.outbound_peers.len() < self.config.num_outbound_peers
         {
+            let missing_outbound = self
+                .config
+                .num_outbound_peers
+                .saturating_sub(self.outbound_peers.len());
+
             info!(
-                "Bootstrap node {} reconnected, triggering rediscovery (have {} outbound peers, need {})",
+                "Bootstrap node {} reconnected, triggering rediscovery (have {}/{} outbound peers)",
                 peer_id,
                 self.outbound_peers.len(),
                 self.config.num_outbound_peers
             );
 
             if self.config.bootstrap_protocol == BootstrapProtocol::Full {
-                debug!("Re-triggering full discovery extension");
-                self.initiate_extension_with_target(swarm, self.config.num_outbound_peers);
+                if missing_outbound > 0 {
+                    debug!(
+                        "Re-triggering full discovery extension (missing {} peers)",
+                        missing_outbound
+                    );
+                    self.initiate_extension_with_target(swarm, missing_outbound);
+                }
             } else {
                 debug!("Kademlia bootstrap will be triggered by automatic bootstrap mechanism");
             }

@@ -289,10 +289,10 @@ async fn run(
         };
     }
 
-    // Timer to periodically try reconnecting to persistent peers
-    // TODO: Using 1 second for now, for faster reconnection during testing
-    // Maybe adjust via config in the future
-    let mut persistent_peer_timer = tokio::time::interval(std::time::Duration::from_secs(1));
+    // Timer for periodic network maintenance:
+    // - Reconnect to persistent peers (bootstrap nodes)
+    // - Trigger periodic rediscovery (for Full mode)
+    let mut periodic_maintenance_timer = tokio::time::interval(std::time::Duration::from_secs(5));
 
     loop {
         let result = tokio::select! {
@@ -324,9 +324,13 @@ async fn run(
                 handle_ctrl_msg(&mut swarm, &mut state, &config, ctrl).await
             }
 
-            _ = persistent_peer_timer.tick() => {
-                // Periodically attempt to dial bootstrap nodes
+            _ = periodic_maintenance_timer.tick() => {
+                // Attempt to (re)dial bootstrap nodes
                 state.discovery.dial_bootstrap_nodes(&swarm);
+
+                // Trigger (re)discovery for Full mode
+                state.discovery.maybe_trigger_rediscovery(&mut swarm);
+
                 ControlFlow::Continue(())
             }
         };
