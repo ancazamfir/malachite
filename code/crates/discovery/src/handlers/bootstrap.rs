@@ -22,13 +22,18 @@ where
             self.metrics.initial_bootstrap_finished();
 
             if self.active_connections.len() < self.config.num_outbound_peers {
+                let missing = self
+                    .config
+                    .num_outbound_peers
+                    .saturating_sub(self.active_connections.len());
+
                 info!(
                     "Not enough active connections (got {}, expected {}) to select outbound peers",
                     self.active_connections.len(),
                     self.config.num_outbound_peers
                 );
 
-                self.initiate_extension_with_target(swarm, self.config.num_outbound_peers);
+                self.initiate_extension_with_target(swarm, missing);
             } else {
                 info!(
                     "Discovery found {} peers (expected {}) in {}ms",

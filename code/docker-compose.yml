@@ -41,7 +41,7 @@ services:
     environment:
       - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
       - RUST_BACKTRACE=1
-    command: /usr/local/bin/malachite start --home /app/node
+    command: sh -c "sleep 5 && /usr/local/bin/malachite start --home /app/node"
     restart: unless-stopped
 
   node2:
@@ -60,7 +60,7 @@ services:
     environment:
       - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
       - RUST_BACKTRACE=1
-    command: /usr/local/bin/malachite start --home /app/node
+    command: sh -c "sleep 5 && /usr/local/bin/malachite start --home /app/node"
     restart: unless-stopped
 
   node3:

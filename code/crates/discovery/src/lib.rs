@@ -8,6 +8,8 @@ use libp2p::{identify, kad, request_response, swarm::ConnectionId, Multiaddr, Pe
 
 mod util;
 
+mod addr_filter;
+
 mod behaviour;
 pub use behaviour::*;
 
@@ -124,6 +126,42 @@ where
 
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
+    }
+
+    /// Trigger rediscovery for Full mode
+    ///
+    /// This is called on each periodic maintenance tick (every 5s) to send PeersRequest
+    /// to all connected peers, ensuring we discover new nodes that may have joined.
+    /// Only applies to Full mode (Kademlia has its own periodic bootstrap).
+    pub fn maybe_trigger_rediscovery(&mut self, swarm: &mut Swarm<C>) {
+        // Only applies to Full mode
+        if self.config.bootstrap_protocol != config::BootstrapProtocol::Full {
+            return;
+        }
+
+        // Only trigger if we're idle (not currently bootstrapping or extending)
+        if self.state != State::Idle {
+            return;
+        }
+
+        // Check if we're missing outbound peers
+        let missing_outbound = self
+            .config
+            .num_outbound_peers
+            .saturating_sub(self.outbound_peers.len());
+        if missing_outbound == 0 {
+            // We have all the peers we need, no need to rediscover
+            return;
+        }
+
+        info!(
+            "Periodic peer rediscovery (have {}/{} outbound peers)",
+            self.outbound_peers.len(),
+            self.config.num_outbound_peers
+        );
+
+        // Use the standard extension initiation path which will clear "done" status
+        self.initiate_extension_with_target(swarm, missing_outbound);
     }
 
     pub fn on_network_event(

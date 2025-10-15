@@ -1,4 +1,7 @@
-moniker = "validator-2"
+# Node 6 - Full Node in Private Network B
+# Connects only to sentry node (node7) in its private network
+
+moniker = "fullnode-6"
 
 [logging]
 log_level = "debug"
@@ -17,7 +20,9 @@ queue_capacity = 100
 
 [consensus.p2p]
 listen_addr = "/ip4/0.0.0.0/tcp/27000"
-persistent_peers = ["/ip4/192.168.100.10/tcp/27000"]
+persistent_peers = [
+    "/ip4/172.24.0.14/tcp/27000",
+]
 pubsub_max_size = "4.2 MB"
 rpc_max_size = "10.5 MB"
 
@@ -56,7 +61,7 @@ batch_size = 5
 
 [metrics]
 enabled = true
-listen_addr = "0.0.0.0:29000"
+listen_addr = "0.0.0.0:29006"
 
 [runtime]
 flavor = "single_threaded"

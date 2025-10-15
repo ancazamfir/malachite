@@ -153,10 +153,14 @@ impl Behaviour {
         keypair: &Keypair,
         registry: &mut Registry,
     ) -> Result<Self> {
-        let identify = identify::Behaviour::new(identify::Config::new(
-            config.protocol_names.consensus.clone(),
-            keypair.public(),
-        ));
+        // Disable Identify's address cache to prevent libp2p from automatically tracking
+        // and dialing all addresses learned through Identify, including loopback addresses.
+        // Addresses are manually filtered in discovery/handlers/identify.rs before storing them
+        // in discovered_peers, and this ensures libp2p only dials those filtered addresses.
+        let identify = identify::Behaviour::new(
+            identify::Config::new(config.protocol_names.consensus.clone(), keypair.public())
+                .with_cache_size(0),
+        );
 
         let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(5)));
 

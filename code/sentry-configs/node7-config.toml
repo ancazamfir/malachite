@@ -1,4 +1,8 @@
-moniker = "validator-2"
+# Node 7 - Sentry Node for Private Network B
+# Bridges private network B with public network
+# Connects to local validators (node4, node5, node6) and remote sentry (node3)
+
+moniker = "sentry-7"
 
 [logging]
 log_level = "debug"
@@ -17,7 +21,10 @@ queue_capacity = 100
 
 [consensus.p2p]
 listen_addr = "/ip4/0.0.0.0/tcp/27000"
-persistent_peers = ["/ip4/192.168.100.10/tcp/27000"]
+persistent_peers = [
+    "/ip4/172.24.0.14/tcp/27000",  # node4 (validator) private IP
+    "/ip4/10.0.0.3/tcp/27000"      # node3 (sentry) public IP
+]
 pubsub_max_size = "4.2 MB"
 rpc_max_size = "10.5 MB"
 
@@ -56,7 +63,7 @@ batch_size = 5
 
 [metrics]
 enabled = true
-listen_addr = "0.0.0.0:29000"
+listen_addr = "0.0.0.0:29007"
 
 [runtime]
 flavor = "single_threaded"

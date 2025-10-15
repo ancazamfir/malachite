@@ -18,14 +18,14 @@ queue_capacity = 100
 [consensus.p2p]
 listen_addr = "/ip4/0.0.0.0/tcp/27000"
 # Validators talk to each other via their INTERNAL/PRIVATE addresses
-persistent_peers = ["/ip4/172.21.0.10/tcp/27000", "/ip4/172.21.0.11/tcp/27000"]
+persistent_peers = ["/ip4/172.21.0.10/tcp/27000"]
 pubsub_max_size = "4.2 MB"
 rpc_max_size = "10.5 MB"
 
 [consensus.p2p.discovery]
-enabled = false
-bootstrap_protocol = "full"
-selector = "random"
+enabled = true
+bootstrap_protocol = "kademlia"
+selector = "kademlia"
 num_outbound_peers = 20
 num_inbound_peers = 20
 max_connections_per_peer = 5

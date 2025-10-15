@@ -1,0 +1,218 @@
+version: "3.8"
+
+# Sentry Node Architecture:
+# - Private Network A: node0, node1, node2, node3 (sentry)
+#   - Internal subnet: 172.20.0.0/24
+# - Private Network B: node4, node5, node6, node7 (sentry)
+#   - Internal subnet: 172.24.0.0/24
+# - Public Network: node3, node7
+#   - Public subnet: 10.0.0.0/24
+#
+# Connectivity:
+# - node0, node1, node2 can only reach node3 (their sentry)
+# - node4, node5, node6 can only reach node7 (their sentry)
+# - node3 and node7 can reach each other via public network
+# - Validators: node0, node1, node4, node5 (4 validators across both networks)
+# - Full nodes: node2, node6
+# - Sentry nodes: node3, node7 (bridge the networks)
+
+networks:
+  private_net_a:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+  private_net_b:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.24.0.0/24
+
+  public_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.0.0/24
+
+services:
+  # ============================================
+  # Private Network A (with sentry node3)
+  # ============================================
+
+  # Validator in Network A
+  node0:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node0
+    hostname: node0
+    networks:
+      private_net_a:
+        ipv4_address: 172.20.0.10
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/0:/app/node
+    ports:
+      - "29000:29000"
+      - "27000:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
+  # Validator in Network A
+  node1:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node1
+    hostname: node1
+    networks:
+      private_net_a:
+        ipv4_address: 172.20.0.11
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/1:/app/node
+    ports:
+      - "29001:29000"
+      - "27001:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
+  # Full node in Network A
+  node2:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node2
+    hostname: node2
+    networks:
+      private_net_a:
+        ipv4_address: 172.20.0.12
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/2:/app/node
+    ports:
+      - "29002:29000"
+      - "27002:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
+  # Sentry node for Network A (has both private and public interfaces)
+  node3:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node3
+    hostname: node3
+    networks:
+      private_net_a:
+        ipv4_address: 172.20.0.13
+      public_net:
+        ipv4_address: 10.0.0.3
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/3:/app/node
+    ports:
+      - "29003:29000"
+      - "27003:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
+  # ============================================
+  # Private Network B (with sentry node7)
+  # ============================================
+
+  # Validator in Network B
+  node4:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node4
+    hostname: node4
+    networks:
+      private_net_b:
+        ipv4_address: 172.24.0.14
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/4:/app/node
+    ports:
+      - "29004:29000"
+      - "27004:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
+  # Validator in Network B
+  node5:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node5
+    hostname: node5
+    networks:
+      private_net_b:
+        ipv4_address: 172.24.0.15
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/5:/app/node
+    ports:
+      - "29005:29000"
+      - "27005:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
+  # Full node in Network B
+  node6:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node6
+    hostname: node6
+    networks:
+      private_net_b:
+        ipv4_address: 172.24.0.16
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/6:/app/node
+    ports:
+      - "29006:29000"
+      - "27006:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
+  # Sentry node for Network B (has both private and public interfaces)
+  node7:
+    image: ubuntu:22.04
+    platform: linux/amd64
+    container_name: malachite_node7
+    hostname: node7
+    networks:
+      private_net_b:
+        ipv4_address: 172.24.0.17
+      public_net:
+        ipv4_address: 10.0.0.7
+    volumes:
+      - ./target/x86_64-unknown-linux-gnu/release/informalsystems-malachitebft-example-channel:/usr/local/bin/malachite:ro
+      - ./deployments/volumes/malachite/7:/app/node
+    ports:
+      - "29007:29000"
+      - "27007:27000"
+    environment:
+      - RUST_LOG=debug,libp2p_swarm::handler=off,libp2p_swarm=info
+      - RUST_BACKTRACE=1
+    command: /usr/local/bin/malachite start --home /app/node
+    restart: unless-stopped
+
