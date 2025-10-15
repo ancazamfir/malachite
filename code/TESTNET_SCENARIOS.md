@@ -16,13 +16,13 @@ Each scenario validates that the bootstrap identification logic correctly uses `
 | Testnet Scenario | Full Discovery | Kademlia Discovery | Notes |
 |-----------------|----------------|-------------------|-------|
 | `make testnet` | ✅ Working | ✅ Working | |
-| `make testnet` + restart validators | ❌ Broken  | ✅ Working  | failure for full - (2) |
+| `make testnet` + restart validators | ✅ Working  | ✅ Working  | |
 | `make testnet-multi` | ✅ Working | ✅ Working |  |
-| `make testnet-multi` + restart validators | ❌ Broken |  ✅ Working | failure for full (2) |
+| `make testnet-multi` + restart validators | ✅ Working |  ✅ Working | |
 | `make testnet-nat` | ❌ Broken | ❌ Broken | libp2p-relay |
 | `make testnet-nat` + restart validators | ❌ Broken | ❌ Broken | libp2p-relay |
 | `make testnet-sentry` | ✅ Working | ❌ Broken | syn_sent for kad - (1) |
-| `make testnet-sentry` + restart validators | ❌ Broken  | ❌ Broken  | failures for full - (2) kad - (1) |
+| `make testnet-sentry` + restart validators | ✅ Working  | ❌ Broken  | kad - (1) |
 
 Notes:
 1. Kademlia has to run in Server mode, so it actively maintains the DHT routing table by auto-dialing peers discovered through DHT queries. This is standard for DHT nodes, but it means Kademlia will dial unreachable addresses from the routing table.
@@ -44,7 +44,7 @@ node7 connections:
   172.24.0.17:57010 → 172.24.0.16:27000 [ESTABLISHED] →node6
 ```
 
-2. Full discovery mode doesn't have periodic rediscovery. After simultaneous validator restarts, there's a race condition: when nodes connect to their bootstrap peer (node0) and immediately send PeersRequest, the identify protocol hasn't completed yet for other newly connected peers. This causes nodes to miss discovering each other. Unlike Kademlia which has libp2p's built-in `periodic_bootstrap_interval` (every 5s), Full mode only triggers rediscovery on bootstrap peer reconnects. Without periodic PeersRequest, nodes never discover the peers they missed in the initial race. Consensus still works (messages relay through node0), but the topology is suboptimal.
+2. ~~Full discovery mode doesn't have periodic rediscovery. After simultaneous validator restarts, there's a race condition: when nodes connect to their bootstrap peer (node0) and immediately send PeersRequest, the identify protocol hasn't completed yet for other newly connected peers. This causes nodes to miss discovering each other. Unlike Kademlia which has libp2p's built-in `periodic_bootstrap_interval` (every 5s), Full mode only triggers rediscovery on bootstrap peer reconnects. Without periodic PeersRequest, nodes never discover the peers they missed in the initial race. Consensus still works (messages relay through node0), but the topology is suboptimal.~~ **FIXED**: Full mode now has periodic rediscovery (every 5s) to handle validator restarts.
 
 **Legend:**
 - ✅ Working - Tested and functioning correctly
