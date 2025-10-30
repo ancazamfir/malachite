@@ -4,7 +4,7 @@ use libp2p::{
     request_response::{OutboundRequestId, ResponseChannel},
     Multiaddr, PeerId, Swarm,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     addr_filter,
@@ -70,20 +70,101 @@ where
     ) {
         // Compute the difference between the discovered peers and the requested peers
         // to avoid sending the requesting peer the peers it already knows.
-        let peers_difference = self
+        let peers_difference: HashSet<_> = self
             .get_all_peers_except(peer)
             .difference(&peers)
             .cloned()
             .collect();
 
+        // Get the requesting peer's addresses to filter based on their reachability
+        // We need the requesting peer's addresses to determine if target peers are reachable from them
+        let peer_addrs: Vec<_> = if let Some(peer_info) = self.discovered_peers.get(&peer) {
+            peer_info.listen_addrs.clone()
+        } else {
+            // Fallback: if we don't have the requesting peer's info, use our own addresses
+            // This is conservative but may miss some relay opportunities
+            debug!(
+                "No address info for requesting peer {}, using our own addresses for filtering",
+                peer
+            );
+            swarm
+                .external_addresses()
+                .chain(swarm.listeners())
+                .cloned()
+                .collect()
+        };
+
+        // Filter and construct relay addresses for peers that aren't directly reachable
+        // Strategy: If we're connected to both the requesting peer and the target peer,
+        // we can act as a relay between them, regardless of our relay server configuration.
+        let relay_client_enabled = !self.relay_servers.is_empty();
+
+        let filtered_peers: HashSet<_> = peers_difference
+            .into_iter()
+            .filter_map(|(maybe_peer_id, addrs)| {
+                let peer_info = maybe_peer_id
+                    .as_ref()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                // Filter addresses based on reachability from the requesting peer
+                let filtered = addr_filter::filter_addresses_with_relay(&addrs, &peer_addrs, &peer_info);
+
+                // If direct addresses exist, use them
+                if !filtered.direct.is_empty() {
+                    return Some((maybe_peer_id, filtered.direct));
+                }
+
+                // If no direct addresses but we have the peer ID, try to construct relay addresses
+                if !filtered.relay_candidates.is_empty() {
+                    if let Some(target_peer_id) = maybe_peer_id {
+                        // First, try using ourselves as the relay (since we're connected to both peers)
+                        let relay_addrs = self.construct_relay_addresses_via_self(swarm, target_peer_id);
+                        if !relay_addrs.is_empty() {
+                            info!(
+                                "Constructed {} relay address(es) for peer {} via ourselves in peers response: {:?}",
+                                relay_addrs.len(),
+                                peer_info,
+                                relay_addrs
+                            );
+                            return Some((Some(target_peer_id), relay_addrs));
+                        }
+
+                        // If that didn't work, try using our configured relay servers
+                        if relay_client_enabled {
+                            let relay_addrs = self.construct_relay_addresses(target_peer_id);
+                            if !relay_addrs.is_empty() {
+                                debug!(
+                                    "Constructed {} relay address(es) for peer {} via relay servers in peers response",
+                                    relay_addrs.len(),
+                                    peer_info
+                                );
+                                return Some((Some(target_peer_id), relay_addrs));
+                            }
+                        }
+                    }
+                }
+
+                // If no valid addresses (direct or relay), exclude this peer from response
+                debug!(
+                    "Excluding peer {} from peers response - no reachable addresses",
+                    peer_info
+                );
+                None
+            })
+            .collect();
+
+        let peer_count = filtered_peers.len();
+        debug!("Sending {} peer(s) to {}", peer_count, peer);
+
         if swarm
             .behaviour_mut()
-            .send_response(channel, behaviour::Response::Peers(peers_difference))
+            .send_response(channel, behaviour::Response::Peers(filtered_peers))
             .is_err()
         {
             error!("Error sending peers to {peer}");
         } else {
-            trace!("Sent peers to {peer}");
+            trace!("Sent {} peer(s) to {peer}", peer_count);
         }
     }
 
@@ -174,18 +255,59 @@ where
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
-            // Filter addresses: keep only those reachable from ANY of our local addresses
-            let filtered_addrs =
-                addr_filter::filter_reachable_addresses(&listen_addrs, &own_addrs, &peer_info);
+            // Check if any addresses are already relay circuit addresses
+            // Relay circuit addresses are pre-constructed paths that should be dialed directly
+            let (relay_addrs, non_relay_addrs): (Vec<_>, Vec<_>) = listen_addrs
+                .into_iter()
+                .partition(|addr| addr.to_string().contains("/p2p-circuit/"));
 
-            if !filtered_addrs.is_empty() {
+            // If we have relay circuit addresses, use them directly (already filtered)
+            if !relay_addrs.is_empty() {
                 debug!(
-                    "Adding peer {} to dial queue with {} filtered addresses (from {})",
+                    "Adding peer {} to dial queue with {} relay circuit address(es)",
                     peer_info,
-                    filtered_addrs.len(),
-                    listen_addrs.len()
+                    relay_addrs.len()
                 );
-                self.add_to_dial_queue(swarm, DialData::new(peer_id, filtered_addrs));
+                self.add_to_dial_queue(swarm, DialData::new(peer_id, relay_addrs));
+                continue;
+            }
+
+            // For non-relay addresses, apply normal filtering
+            let filtered =
+                addr_filter::filter_addresses_with_relay(&non_relay_addrs, &own_addrs, &peer_info);
+
+            // Try direct addresses first
+            if !filtered.direct.is_empty() {
+                debug!(
+                    "Adding peer {} to dial queue with {} direct address(es) (from {})",
+                    peer_info,
+                    filtered.direct.len(),
+                    non_relay_addrs.len()
+                );
+                self.add_to_dial_queue(swarm, DialData::new(peer_id, filtered.direct));
+            }
+            // If we have relay candidates and relay is enabled, construct relay addresses
+            else if !filtered.relay_candidates.is_empty()
+                && !self.relay_servers.is_empty()
+                && peer_id.is_some()
+            {
+                let target_peer_id = peer_id.unwrap();
+                let relay_addrs = self.construct_relay_addresses(target_peer_id);
+
+                if !relay_addrs.is_empty() {
+                    info!(
+                        "Peer {} not directly reachable ({} relay candidate(s)), using {} relay address(es)",
+                        peer_info,
+                        filtered.relay_candidates.len(),
+                        relay_addrs.len()
+                    );
+                    self.add_to_dial_queue(swarm, DialData::new(Some(target_peer_id), relay_addrs));
+                } else {
+                    debug!(
+                        "Peer {} has relay candidates but no relay servers available",
+                        peer_info
+                    );
+                }
             } else {
                 debug!(
                     "Filtered all addresses for peer {}, not adding to dial queue",

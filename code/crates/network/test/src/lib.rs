@@ -166,6 +166,7 @@ impl<const N: usize> Test<N> {
             enable_consensus: true,
             enable_sync: false,
             protocol_names: ProtocolNames::default(),
+            relay: malachitebft_config::RelayConfig::default(),
         })
     }
 

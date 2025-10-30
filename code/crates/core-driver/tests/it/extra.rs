@@ -2336,6 +2336,70 @@ fn proposal_mux_with_commit_quorum() {
     run_steps(&mut driver, steps);
 }
 
+#[test]
+fn ottersec_spec2_test() {
+    let [(v1, _sk1), (v2, _sk2), (v3, sk3)] = make_validators([2, 3, 2]);
+    let (_my_sk, my_addr) = (sk3.clone(), v3.address);
+
+    let height = Height::new(1);
+    let ctx = TestContext::new();
+    let vs = ValidatorSet::new(vec![v1.clone(), v2.clone(), v3.clone()]);
+
+    let mut driver = Driver::new(ctx, height, vs, my_addr, Default::default());
+
+    let steps = vec![
+        TestStep {
+            desc: "Start round 0, we, v3, are not the proposer, start timeout propose",
+            input: new_round_input(Round::new(0), v1.address),
+            expected_outputs: vec![start_propose_timer_output(Round::new(0))],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "Prevote from v2 while in propose step",
+            input: prevote_nil_input(&v2.address),
+            expected_outputs: vec![],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "Prevote from v3, we have PolkaNil, not trigged in propose step",
+            input: prevote_nil_input(&v3.address),
+            expected_outputs: vec![],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "Precommit from v2",
+            input: precommit_nil_input(Round::new(0), &v2.address),
+            expected_outputs: vec![],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "Precommit from v3, quorum of precommits, timeout to be scheduled",
+            input: precommit_nil_input(Round::new(0), &v3.address),
+            expected_outputs: vec![start_precommit_timer_output(Round::new(0))],
+            expected_round: Round::new(0),
+            new_state: propose_state(Round::new(0)),
+        },
+        TestStep {
+            desc: "Timeout propose, prevote nil; since we have PolkaNil, also precommit nil",
+            input: timeout_propose_input(Round::new(0)),
+            expected_outputs: vec![
+                prevote_nil_output(Round::new(0), &my_addr),
+                start_precommit_timer_output(Round::new(0)),
+                precommit_nil_output(Round::new(0), &my_addr),
+                start_precommit_timer_output(Round::new(0)),
+            ],
+            expected_round: Round::new(0),
+            new_state: precommit_state(Round::new(0)),
+        },
+    ];
+
+    run_steps(&mut driver, steps);
+}
+
 fn run_steps(driver: &mut Driver<TestContext>, steps: Vec<TestStep>) {
     for step in steps {
         println!("Step: {}", step.desc);

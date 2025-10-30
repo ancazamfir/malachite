@@ -96,12 +96,22 @@ where
     /// relay servers (initially configured with addresses but peer_id = None).
     /// When a match is found, the relay server entry is updated with the peer's ID.
     ///
+    /// Matching can happen in two ways:
+    /// 1. The peer's listen_addrs match the configured relay server addresses (direct match)
+    /// 2. The dialed_addr (address we used to connect) matches the relay server addresses (NAT gateway case)
+    ///
     /// Returns true if the peer was identified as a relay server.
-    fn update_relay_server_peer_id(&mut self, peer_id: PeerId, listen_addrs: &[Multiaddr]) -> bool {
+    fn update_relay_server_peer_id(
+        &mut self,
+        peer_id: PeerId,
+        listen_addrs: &[Multiaddr],
+        dialed_addr: Option<&Multiaddr>,
+    ) -> bool {
         debug!(
-            "Checking peer {} against {} relay servers",
+            "Checking peer {} against {} relay servers (dialed_addr: {:?})",
             peer_id,
-            self.relay_servers.len()
+            self.relay_servers.len(),
+            dialed_addr
         );
 
         // Skip if peer is already identified (avoid duplicate work)
@@ -119,14 +129,35 @@ where
 
         // Match addresses against relay server configurations
         for (maybe_peer_id, relay_addrs) in self.relay_servers.iter_mut() {
-            // Check if this relay server is unidentified and addresses match
-            if maybe_peer_id.is_none()
-                && listen_addrs
-                    .iter()
-                    .any(|listen_addr| relay_addrs.contains(listen_addr))
-            {
+            if maybe_peer_id.is_some() {
+                continue; // Already identified
+            }
+
+            // Check if peer's listen addresses match the configured relay addresses
+            let listen_addr_matches = listen_addrs
+                .iter()
+                .any(|listen_addr| relay_addrs.contains(listen_addr));
+
+            // Check if the address we dialed matches the configured relay addresses
+            // This is crucial for NAT scenarios where we dial through a gateway
+            // (e.g., 192.168.100.254:27003) but the peer advertises its real address (10.0.1.13:27000)
+            let dialed_addr_matches = dialed_addr
+                .map(|addr| relay_addrs.contains(addr))
+                .unwrap_or(false);
+
+            if listen_addr_matches || dialed_addr_matches {
                 // Relay server discovered: None -> Some(peer_id)
-                info!("Relay server {} successfully identified at {:?}", peer_id, relay_addrs);
+                if dialed_addr_matches {
+                    info!(
+                        "Relay server {} successfully identified via dialed address {:?} (peer advertises {:?})",
+                        peer_id, dialed_addr, listen_addrs
+                    );
+                } else {
+                    info!(
+                        "Relay server {} successfully identified at {:?}",
+                        peer_id, relay_addrs
+                    );
+                }
                 *maybe_peer_id = Some(peer_id);
                 return true; // Indicate this was a relay server
             }
@@ -174,16 +205,51 @@ where
         // Match peer against bootstrap nodes
         let was_identified_as_bootstrap = self.update_bootstrap_node_peer_id(peer_id);
 
-        // Match peer against relay servers and listen on relay circuit if identified
-        let is_relay_server = self.update_relay_server_peer_id(peer_id, &non_loopback_addrs);
+        // Get the address we used to dial this peer (if any) from in-progress dial data
+        // This is crucial for NAT scenarios where we dial through a gateway address
+        let dialed_addr = self
+            .controller
+            .dial
+            .get_in_progress(&connection_id)
+            .and_then(|dial_data| dial_data.listen_addrs().first().cloned());
+
+        // Match peer against relay servers
+        let is_relay_server =
+            self.update_relay_server_peer_id(peer_id, &non_loopback_addrs, dialed_addr.as_ref());
         if is_relay_server {
-            // Listen on the relay circuit to establish a reservation
-            let relay_addr = format!("/p2p/{}/p2p-circuit", peer_id)
-                .parse()
-                .expect("Valid relay address");
-            info!("Listening on relay circuit via {}", peer_id);
-            if let Err(e) = swarm.listen_on(relay_addr) {
-                warn!("Failed to listen on relay circuit: {}", e);
+            info!(
+                "Relay server {} identified, establishing relay reservation",
+                peer_id
+            );
+
+            // Establish a relay reservation by listening on a circuit address through this relay
+            // Key insight from libp2p dcutr example: We're ALREADY connected to the relay at this point
+            // (identify only triggers after connection establishment), so we can immediately request
+            // a reservation by calling listen_on() with the circuit address.
+            // Format: /ip4/<relay-ip>/tcp/<port>/p2p/<relay-peer-id>/p2p-circuit
+            // NOTE: No destination peer ID needed - the relay client transport figures it out
+            for relay_addr in non_loopback_addrs.iter() {
+                let circuit_addr = relay_addr
+                    .clone()
+                    .with(libp2p::multiaddr::Protocol::P2p(peer_id))
+                    .with(libp2p::multiaddr::Protocol::P2pCircuit);
+
+                info!(
+                    "Requesting relay reservation through {}: {}",
+                    peer_id, circuit_addr
+                );
+                match swarm.listen_on(circuit_addr.clone()) {
+                    Ok(_) => {
+                        debug!("Successfully requested relay reservation");
+                        break; // Only need one reservation per relay
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to listen on circuit address {}: {:?}",
+                            circuit_addr, e
+                        );
+                    }
+                }
             }
         }
 
@@ -206,10 +272,12 @@ where
             .collect();
 
         // Filter peer addresses based on network reachability
+        let relay_enabled = !self.relay_servers.is_empty();
         let filtered_addrs = addr_filter::filter_reachable_addresses(
             &info.listen_addrs,
             &own_addrs,
             &peer_id.to_string(),
+            relay_enabled,
         );
 
         let filtered_info = identify::Info {
@@ -329,16 +397,25 @@ where
                 }
             }
             // Add the address to the Kademlia routing table (only if we have reachable addresses)
+            // Note: We add DIRECT addresses only to Kademlia. Relay circuit addresses should NOT
+            // be stored in Kademlia because they can create double-relay scenarios (relay-through-relay).
+            // Instead, relay addresses are constructed dynamically when needed.
             if self.config.bootstrap_protocol == BootstrapProtocol::Kademlia {
-                if let Some(addr) = filtered_info.listen_addrs.first() {
+                // Find first NON-circuit address (doesn't contain /p2p-circuit/)
+                let direct_addr = filtered_info
+                    .listen_addrs
+                    .iter()
+                    .find(|addr| !addr.to_string().contains("/p2p-circuit/"));
+
+                if let Some(addr) = direct_addr {
                     debug!(
-                        "Adding peer {} address {} to Kademlia routing table",
+                        "Adding peer {} direct address {} to Kademlia routing table",
                         peer_id, addr
                     );
                     swarm.behaviour_mut().add_address(&peer_id, addr.clone());
                 } else {
                     debug!(
-                        "Not adding peer {} to Kademlia routing table - no reachable addresses",
+                        "Not adding peer {} to Kademlia routing table - no direct addresses (only relay circuits)",
                         peer_id
                     );
                 }
@@ -396,5 +473,160 @@ where
         self.update_discovery_metrics();
 
         is_already_connected
+    }
+
+    /// Handle identify push events (address updates from connected peers)
+    ///
+    /// When a peer's addresses change (e.g., after obtaining a relay reservation),
+    /// libp2p's identify protocol sends a push update to all connected peers.
+    /// This method processes those updates and ensures the new addresses (including
+    /// relay circuit addresses) are added to Kademlia DHT for cross-network discovery.
+    pub fn handle_identify_push(
+        &mut self,
+        swarm: &mut Swarm<C>,
+        peer_id: PeerId,
+        info: identify::Info,
+    ) {
+        debug!(
+            "Processing identify push from {}: {} address(es), raw addrs: {:?}",
+            peer_id,
+            info.listen_addrs.len(),
+            info.listen_addrs
+        );
+
+        // Get ALL our addresses (external + listeners) for multi-homed filtering
+        let own_addrs: Vec<_> = swarm
+            .external_addresses()
+            .chain(swarm.listeners())
+            .cloned()
+            .collect();
+
+        // CRITICAL BUG FIX: Remove any addresses that belong to us (the receiver)
+        // When a peer calls listen_on() with OUR address as a relay circuit, libp2p adds
+        // our direct address to THEIR listen addresses! This causes them to advertise
+        // our IPs as their own in the identify protocol. We must filter out our own
+        // addresses from the peer's advertised addresses.
+        let our_base_addrs: Vec<String> = own_addrs
+            .iter()
+            .map(|addr| {
+                // Extract the base address (IP/port) before any /p2p/ suffix
+                addr.to_string()
+                    .split("/p2p/")
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let addrs_without_our_ips: Vec<_> = info.listen_addrs
+            .iter()
+            .filter(|addr| {
+                let addr_str = addr.to_string();
+                // Extract the base part of the peer's address
+                let peer_base = addr_str.split("/p2p/").next().unwrap_or(&addr_str);
+
+                // Filter out if this address matches any of our own addresses
+                for our_base in &our_base_addrs {
+                    if peer_base == our_base || addr_str.starts_with(&format!("{}/", our_base)) {
+                        debug!(
+                            "Filtering out our own address {} from peer {}'s listen addresses (libp2p bug)",
+                            addr_str, peer_id
+                        );
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+
+        // Filter peer addresses into directly reachable and relay candidates
+        let filtered = addr_filter::filter_addresses_with_relay(
+            &addrs_without_our_ips,
+            &own_addrs,
+            &peer_id.to_string(),
+        );
+
+        let direct_count = filtered.direct.len();
+        let relay_count = filtered.relay_candidates.len();
+
+        // Combine direct and relay candidate addresses - we store both so that later
+        // when sharing peers, we can construct relay addresses if direct addresses fail
+        let mut all_filtered_addrs = filtered.direct;
+        all_filtered_addrs.extend(filtered.relay_candidates);
+
+        debug!(
+            "Identify push filtered addrs for {}: {} direct, {} relay candidates",
+            peer_id, direct_count, relay_count
+        );
+
+        // CRITICAL: Merge new addresses with existing ones instead of replacing them entirely.
+        // When a peer gets a relay reservation, it pushes ALL its addresses (including the new
+        // relay one), but the filtering might incorrectly remove good direct addresses.
+        // To prevent losing valid addresses, we keep existing addresses and only add new ones.
+        // Additionally, if filtering results in NO addresses, we keep the old ones entirely.
+        let merged_addrs = if let Some(old_info) = self.discovered_peers.get(&peer_id) {
+            if all_filtered_addrs.is_empty() {
+                // Filtering removed everything - keep old addresses
+                debug!(
+                    "Identify push from {} filtered to 0 addresses, keeping existing {} address(es)",
+                    peer_id,
+                    old_info.listen_addrs.len()
+                );
+                old_info.listen_addrs.clone()
+            } else {
+                // Merge new filtered addresses with existing ones
+                let mut addrs = old_info.listen_addrs.clone();
+                for addr in all_filtered_addrs {
+                    if !addrs.contains(&addr) {
+                        addrs.push(addr);
+                    }
+                }
+                addrs
+            }
+        } else {
+            // No existing info - use filtered addresses (even if empty)
+            all_filtered_addrs
+        };
+
+        let filtered_info = identify::Info {
+            listen_addrs: merged_addrs,
+            ..info
+        };
+
+        // Update discovered peers with merged addresses
+        let old_info = self.discovered_peers.insert(peer_id, filtered_info.clone());
+
+        if let Some(old_info) = old_info {
+            if old_info.listen_addrs != filtered_info.listen_addrs {
+                info!(
+                    "Updated addresses for peer {}: {:?} -> {:?}",
+                    peer_id, old_info.listen_addrs, filtered_info.listen_addrs
+                );
+            }
+        }
+
+        // Update Kademlia routing table with new addresses if using Kademlia
+        if self.config.bootstrap_protocol == BootstrapProtocol::Kademlia {
+            // Find first NON-circuit address (doesn't contain /p2p-circuit/)
+            let direct_addr = filtered_info
+                .listen_addrs
+                .iter()
+                .find(|addr| !addr.to_string().contains("/p2p-circuit/"));
+
+            if let Some(addr) = direct_addr {
+                debug!(
+                    "Updating Kademlia routing table for peer {} with address {}",
+                    peer_id, addr
+                );
+                swarm.behaviour_mut().add_address(&peer_id, addr.clone());
+            } else {
+                debug!(
+                    "Peer {} push update has no direct addresses (only relay circuits), not updating Kademlia",
+                    peer_id
+                );
+            }
+        }
     }
 }

@@ -38,7 +38,7 @@ enabled = true
 mode = "client"
 # node7 (sentry) - will get peer ID via identify
 relay_servers = [
-    "/ip4/172.21.0.17/tcp/27000",
+    "/ip4/172.24.0.17/tcp/27000",
 ]
 
 [consensus.p2p.protocol]

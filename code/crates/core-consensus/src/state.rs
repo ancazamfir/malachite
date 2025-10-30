@@ -114,12 +114,18 @@ where
         }
     }
 
-    pub fn polka_certificate_at_round(&self, round: Round) -> Option<PolkaCertificate<Ctx>> {
-        // Get the polka certificate for the specified round if it exists
+    pub fn polka_certificate_at_round_and_value(
+        &self,
+        round: Round,
+        value_id: &ValueId<Ctx>,
+    ) -> Option<PolkaCertificate<Ctx>> {
+        // Get the polka certificate for the specified round and value if it exists
         self.driver
             .polka_certificates()
             .iter()
-            .find(|c| c.round == round && c.height == self.driver.height())
+            .find(|c| {
+                c.round == round && c.height == self.driver.height() && &c.value_id == value_id
+            })
             .cloned()
     }
 

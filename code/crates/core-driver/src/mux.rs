@@ -92,10 +92,9 @@ where
         }
 
         // Find the polka certificate for the pol_round
-        let polka_certificate_for_previous = self
-            .polka_certificates
-            .iter()
-            .find(|cert| cert.round == proposal.pol_round());
+        let polka_certificate_for_previous = self.polka_certificates.iter().find(|cert| {
+            cert.round == proposal.pol_round() && cert.value_id == proposal.value().id()
+        });
 
         // Determine if there is a polka for a previous round, either from the vote keeper or from the polka certificate
         let polka_previous = proposal.pol_round().is_defined()
@@ -154,7 +153,7 @@ where
         let polka_certificate_for_current = self
             .polka_certificates
             .iter()
-            .find(|cert| cert.round == proposal.round());
+            .find(|cert| cert.round == proposal.round() && cert.value_id == proposal.value().id());
 
         // Determine if there is a polka for the current round, either from the vote keeper or from the polka certificate
         let polka_for_current = polka_certificate_for_current.is_some()
@@ -386,7 +385,7 @@ where
             }
         }
 
-        if let Some(threshold) = find_non_value_threshold(&self.vote_keeper, round) {
+        for threshold in find_non_value_threshold(&self.vote_keeper, round) {
             result.push(self.multiplex_vote_threshold(threshold, round))
         }
 
@@ -397,19 +396,22 @@ where
 fn find_non_value_threshold<Ctx>(
     votekeeper: &VoteKeeper<Ctx>,
     round: Round,
-) -> Option<VKOutput<ValueId<Ctx>>>
+) -> Vec<VKOutput<ValueId<Ctx>>>
 where
     Ctx: Context,
 {
+    let mut thresholds = Vec::new();
+
     if has_precommit_any(votekeeper, round) {
-        Some(VKOutput::PrecommitAny)
-    } else if has_polka_nil(votekeeper, round) {
-        Some(VKOutput::PolkaNil)
-    } else if has_polka_any(votekeeper, round) {
-        Some(VKOutput::PolkaAny)
-    } else {
-        None
+        thresholds.push(VKOutput::PrecommitAny);
     }
+    if has_polka_nil(votekeeper, round) {
+        thresholds.push(VKOutput::PolkaNil);
+    } else if has_polka_any(votekeeper, round) {
+        thresholds.push(VKOutput::PolkaAny);
+    }
+
+    thresholds
 }
 
 /// Check if we have a polka for a value

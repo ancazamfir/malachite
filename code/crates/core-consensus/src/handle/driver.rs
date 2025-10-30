@@ -266,13 +266,15 @@ where
                 // ensures all validators receive it, which is necessary for
                 // them to accept the re-proposed value.
                 if proposal.pol_round().is_defined() {
-                    // Broadcast the polka certificate at pol_round
-                    let Some(polka_certificate) =
-                        state.polka_certificate_at_round(proposal.pol_round())
-                    else {
+                    // Broadcast the polka certificate at pol_round for the proposal value
+                    let Some(polka_certificate) = state.polka_certificate_at_round_and_value(
+                        proposal.pol_round(),
+                        &proposal.value().id(),
+                    ) else {
                         panic!(
-                            "Missing polka certificate for pol_round {}",
-                            proposal.pol_round()
+                            "Missing polka certificate for pol_round {} and value {:?}",
+                            proposal.pol_round(),
+                            proposal.value().id()
                         );
                     };
                     perform!(
@@ -336,7 +338,7 @@ where
                         }
 
                         let Some(polka_certificate) =
-                            state.polka_certificate_at_round(vote.round())
+                            state.polka_certificate_at_round_and_value(vote.round(), value_id)
                         else {
                             panic!(
                                 "Missing polka certificate for Precommit({:?}) at round {}",

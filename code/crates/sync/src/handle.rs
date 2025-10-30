@@ -179,6 +179,14 @@ where
 
     state.update_status(status);
 
+    // Log all connected sync peers
+    let peer_list: Vec<String> = state
+        .peers
+        .iter()
+        .map(|(id, status)| format!("{}(h:{})", id, status.tip_height))
+        .collect();
+    info!(sync_peers = ?peer_list, total = state.peers.len(), "Connected sync peers");
+
     if !state.started {
         // Consensus has not started yet, no need to sync (yet).
         return Ok(());
@@ -511,6 +519,8 @@ where
             // No connected peer reached this height yet, we can stop syncing here.
             break;
         };
+
+        info!(peer.id = %peer, range = %DisplayRange::<Ctx>(&range), "Selected peer for sync");
 
         // Send the request
         let Some((request_id, final_range)) =

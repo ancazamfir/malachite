@@ -18,8 +18,9 @@ queue_capacity = 100
 [consensus.p2p]
 # Validator listens on internal network address
 listen_addr = "/ip4/0.0.0.0/tcp/27000"
-# Validators know each other via internal addresses
-persistent_peers = []
+# Connect to node3 via NAT gateway (which forwards to external net)
+# Note: Gateway needs reverse port forward configured for this to work
+persistent_peers = ["/ip4/192.168.100.254/tcp/27003"]  # NAT gateway's internal IP + forwarded port
 pubsub_max_size = "4.2 MB"
 rpc_max_size = "10.5 MB"
 
@@ -31,6 +32,11 @@ num_outbound_peers = 20
 num_inbound_peers = 20
 max_connections_per_peer = 5
 ephemeral_connection_timeout = "5s"
+
+[consensus.p2p.relay]
+enabled = true
+mode = "client"  # Validator behind NAT, uses node3 as relay
+relay_servers = ["/ip4/192.168.100.254/tcp/27003"]  # node3 via NAT gateway
 
 [consensus.p2p.protocol]
 type = "gossipsub"

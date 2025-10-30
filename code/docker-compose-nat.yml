@@ -31,11 +31,12 @@ services:
         apt-get update -y
         apt-get install -y socat
         echo 'Starting port forwarding...'
-        socat TCP-LISTEN:27000,fork,reuseaddr TCP:192.168.100.10:27000 &
-        socat TCP-LISTEN:27001,fork,reuseaddr TCP:192.168.100.11:27000 &
-        socat TCP-LISTEN:27002,fork,reuseaddr TCP:192.168.100.12:27000 &
+        # Forward outgoing (internal -> external): validators can reach node3 via gateway
+        # Validators connect to 192.168.100.254:27003 which forwards to node3's 10.0.1.13:27000
+        # No incoming forwards, node3 CANNOT directly reach validators (NAT isolation)
+        socat TCP-LISTEN:27003,bind=192.168.100.254,fork,reuseaddr TCP:10.0.1.13:27000 &
         sleep 1
-        echo 'NAT gateway ready - forwarding ports 27000, 27001, 27002'
+        echo 'NAT gateway ready - forwarding port 27003 (outgoing only)'
         ps aux | grep socat | grep -v grep
         tail -f /dev/null
     restart: unless-stopped

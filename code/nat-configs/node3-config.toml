@@ -19,7 +19,9 @@ queue_capacity = 100
 listen_addr = "/ip4/0.0.0.0/tcp/27000"
 # Node3 connects to validators via Docker host gateway (through NAT/port mapping)
 # These are the addresses that actually work for reaching validators from external network
-persistent_peers = ["/ip4/10.0.1.254/tcp/27000"]
+# Removed persistent_peers - node3 cannot reach validators directly (NAT isolation)
+# Validators will connect to node3 and establish relay reservations
+persistent_peers = []
 pubsub_max_size = "4.2 MB"
 rpc_max_size = "10.5 MB"
 
@@ -31,16 +33,11 @@ num_outbound_peers = 20
 num_inbound_peers = 20
 max_connections_per_peer = 5
 ephemeral_connection_timeout = "5s"
-# IMPORTANT: Bootstrap nodes are the SAME addresses as persistent_peers
-# This creates the test scenario where:
-# - We dial using 10.0.1.254 addresses (NAT gateway - what actually works)
-# - But validators advertise 192.168.100.x addresses in identify  
-# - Bootstrap matching should use dial_data (10.0.1.254) not identify info (192.168.100.x)
-bootstrap_nodes = [
-    "/ip4/10.0.1.254/tcp/27000",
-    "/ip4/10.0.1.254/tcp/27001", 
-    "/ip4/10.0.1.254/tcp/27002"
-]
+
+[consensus.p2p.relay]
+enabled = true
+mode = "server"  # node3 is publicly accessible, acts as relay server
+relay_servers = []  # Server doesn't need to configure relay servers
 
 [consensus.p2p.protocol]
 type = "gossipsub"

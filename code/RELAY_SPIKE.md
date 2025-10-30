@@ -2,7 +2,41 @@
 
 ## Overview
 
-Temp status of libp2p relay support in Malachite, what has been implemented, and what remains to be done for full NAT traversal via relay.
+Status of libp2p relay support in Malachite for NAT traversal via circuit relay v2.
+
+### Recent Updates (relay-spike branch)
+
+**🔴 BLOCKED - Relay Reservation Establishment NOT Working**
+
+After extensive investigation, we've discovered that **libp2p 0.56's relay client does NOT support dynamic relay reservation establishment** via `listen_on()`:
+
+1. ✅ Relay client transport IS integrated correctly
+2. ✅ Relay server behavior IS active and registers the `/libp2p/circuit/relay/0.2.0/hop` protocol
+3. ✅ `swarm.listen_on(circuit_addr)` returns `Ok` with correct address format:
+   - Format: `/ip4/<relay-ip>/tcp/<port>/p2p/<relay-peer-id>/p2p-circuit/p2p/<our-peer-id>`
+   - We tried both WITH and WITHOUT peer IDs - neither worked
+4. ❌ BUT: No `NewListenAddr` event is generated for the circuit address
+5. ❌ The relay server never receives any reservation requests (no `ReservationReq` events)
+6. ❌ Result: `NO_RESERVATION` errors when trying to establish circuits
+
+**Root Cause:**
+- The `relay::client::Behaviour` lacks a public API for making reservations programmatically
+- The relay client transport is primarily designed for **dialing** through relays, not listening
+- `listen_on()` for circuit addresses appears to be a no-op in the current libp2p architecture
+- Dynamic reservation establishment would require either:
+  - A public API on `relay::client::Behaviour` to request reservations (doesn't exist)
+  - Or static relay configuration at build time (defeats the purpose of dynamic discovery)
+
+**Current Status:**
+- ✅ Cross-network consensus works via gossipsub message relaying
+- ❌ Cross-network sync DOES NOT work (requires direct connections)
+- ❌ Relay reservations CANNOT be established dynamically
+
+**Options:**
+1. Wait for libp2p to add dynamic reservation API (unknown timeline)
+2. Accept that cross-network sync won't work and rely on gossipsub only
+3. Implement a completely custom relay protocol outside of libp2p
+4. Use a VPN or other network-level solution for cross-network connectivity
 
 ## What Has Been Implemented
 
@@ -40,60 +74,89 @@ Relay server 12D3KooWGN8TCQzXNhw4JwcJ7HAdTfsj6rQUCpSpDPrFQmwMFGuJ successfully i
   - Circuit requests (accepted/denied)
   - Circuit closures
 
+## What Has Been Fixed
+
+### 1. ✅ Relay Client Transport Integration
+
+**Status**: **COMPLETED**
+
+The relay client transport has been successfully integrated into the SwarmBuilder for both TCP and QUIC transports:
+- TCP: Full relay client support via `.with_relay_client()` after `.with_dns()`
+- QUIC: Relay client added with TCP fallback for relay circuits
+
+**Implementation:**
+- Modified `network/src/lib.rs` to add relay client transport conditionally based on `relay.enabled` and `relay.mode`
+- Uses `builder.with_relay_client(noise::Config::new, yamux::Config::default)` in the builder chain
+- Properly handles the SwarmBuilder type state transitions
+
+**Code**: `code/crates/network/src/lib.rs`, lines 204-272
+
+### 2. ❌ Relay Reservation Establishment - **BLOCKED**
+
+**Status**: **TESTED OPTIONS B & C** - Need to implement Option A
+
+**What We Tested**:
+
+**Option C (DCUtR-only)** - ✅ **Works for gossipsub, ❌ doesn't establish direct connections**:
+- Removed explicit `listen_on` calls for p2p-circuit addresses
+- Consensus works through gossipsub mesh (messages relay through sentry nodes)
+- Cross-network discovery works (nodes discover peers in other networks)
+- BUT: No direct connections established, so no latency improvement
+- Sync peers only show local network peers (no cross-network sync)
+
+**Option B (Connect first, then listen)** - ❌ **Still fails with `MissingRelayAddr`**:
+- Called `listen_on("/p2p/<relay-peer-id>/p2p-circuit")` AFTER identify exchange (connection exists)
+- Still fails with `MissingRelayAddr` error
+- **Root cause**: The relay client transport created by `.with_relay_client()` is at the transport layer and doesn't have access to application-level connections
+- The transport layer needs relay servers registered **at build time**, not discovered dynamically
+
+**Why Options B/C Don't Work**:
+- `.with_relay_client()` creates an internal relay client behavior in the **transport layer**
+- This is completely separate from our application-level logic
+- The transport layer doesn't automatically register relay servers from application-level connections
+- `listen_on` for p2p-circuit addresses fails because the transport doesn't know about dynamically discovered relay servers
+
+**Option A (Attempted)** - ❌ **Not Viable**:
+- `relay::client::Behaviour` does not have a public API for manual reservation management
+- It's designed to work only through the transport layer integration
+- Cannot be instantiated or controlled from application code
+
+**Conclusion - libp2p Relay Limitation**:
+**libp2p 0.56's relay client requires static relay server configuration at build time and does not support dynamic relay server discovery.** The `MissingRelayAddr` error is fundamental to the architecture - the relay client transport needs relay servers pre-registered before `listen_on` can work.
+
+**What Works**:
+✅ Gossipsub message relaying through sentry mesh
+✅ Cross-network peer discovery (nodes learn about peers in other networks)
+✅ Consensus operates correctly across networks via application-level message relay
+✅ Relay-aware address filtering (keeps cross-network peer addresses when relay is configured)
+
+**What Doesn't Work**:
+❌ Establishing direct relay connections between nodes in different private networks
+❌ Latency improvement from direct connections  
+❌ Cross-network sync (requires direct peer-to-peer connections)
+
+**Recommendation**: 
+For the sentry architecture, the current gossipsub-based approach is sufficient for consensus. Direct relay connections would improve latency but require either:
+1. Upgrading to a future libp2p version with dynamic relay support
+2. Implementing a custom relay protocol outside of libp2p's framework
+3. Using a different NAT traversal approach (e.g., manual STUN/TURN integration)
+
 ## What Remains To Be Implemented
 
-### 1. Relay Client Transport Integration
+### 1. Relay Address Advertisement
 
-**Problem**: libp2p relay v2 requires a relay client transport to be composed with the base transport (QUIC/TCP) ??. Without this:
-- Cannot listen on p2p-circuit addresses
-- Cannot establish relay reservations
-- Cannot be reached through relay servers
+**Status**: To be tested
 
-**Current Error:**
-```
-WARN Failed to listen on relay circuit: Multiaddr is not supported: /p2p/<relay-peer-id>/p2p-circuit
-```
+The Identify protocol should automatically advertise relay addresses once a reservation is established. Need to verify:
+- Relay addresses appear in identify protocol's `listen_addrs`
+- Discovered peers' relay addresses are stored in `discovered_peers`
+- Other nodes receive and can use these relay addresses
 
-**Potential Solution:**
-- Use `relay::client::new(local_peer_id)` to get a relay client transport and behavior
-- Compose the relay client transport with the existing QUIC/TCP transport
-- This requires refactoring the `SwarmBuilder` initialization in `network/src/lib.rs`
+### 2. Dialing Through Relays
 
-See: `code/crates/network/src/lib.rs`, lines 199-232 (transport initialization)
+**Status**: To be implemented
 
-### 2. Relay Reservation Establishment
-
-**Problem**: Even with relay behavior enabled, nodes don't automatically establish reservations with relay servers.
-
-**Potential Solution:**
-- After identifying a relay server, call `swarm.listen_on("/p2p/<relay-peer-id>/p2p-circuit")`
-- This requires the relay client transport (see #1)
-- Handle `relay::Event::ReservationReqAccepted` to confirm reservation
-
-**Attempted** (currently fails due to missing transport):
-```rust
-// In discovery/src/handlers/identify.rs
-if is_relay_server {
-    let relay_addr = format!("/p2p/{}/p2p-circuit", peer_id).parse().expect("Valid relay address");
-    info!("Listening on relay circuit via {}", peer_id);
-    if let Err(e) = swarm.listen_on(relay_addr) {
-        warn!("Failed to listen on relay circuit: {}", e);
-    }
-}
-```
-
-### 3. Relay Address Advertisement
-
-**Problem**: Even if a node successfully listens on a relay, other nodes need to know about it.
-
-**Potential Solution:**
-- The Identify protocol should automatically advertise relay addresses once a reservation is established
-- Ensure discovered peers' relay addresses are stored in `discovered_peers`
-- When dialing a peer, try relay addresses if direct addresses fail
-
-### 4. Dialing Through Relays
-
-**Problem**: When a peer is only reachable through a relay, we need to construct and dial relay addresses.
+When a peer is only reachable through a relay, we need to construct and dial relay addresses.
 
 **Potential Solution:**
 - Track which peers are reachable through which relays
@@ -101,26 +164,26 @@ if is_relay_server {
 - Implement fallback logic: if direct dial fails, try relay addresses
 - This could be added to `discovery/src/handlers/dial.rs`
 
-### 5. Relay Circuit Metrics
+### 3. Relay Circuit Metrics
 
-**Problem**: No visibility into relay usage and performance.
+**Status**: To be implemented
 
-**Solution:**
-- Add metrics for:
-  - Number of active relay reservations
-  - Number of active relay circuits
-  - Relay bandwidth usage
-  - Relay connection success/failure rates
+Add metrics for visibility into relay usage and performance:
+- Number of active relay reservations
+- Number of active relay circuits
+- Relay bandwidth usage
+- Relay connection success/failure rates
 
 ## Testing Status
 
 ### Sentry Testnet (`make testnet-sentry`)
 
-**Current Status**: 
-- Relay servers are successfully identified 
-- Consensus works through direct sentry connections 
-- Relay circuits are NOT established 
-- Cross-network connections still fail (nodes in network A cannot reach nodes in network B) 
+**Current Status**: **READY FOR TESTING**
+- ✅ Relay client transport integrated
+- ✅ Relay reservation logic implemented
+- 🔄 Need to test if relay reservations are actually established
+- 🔄 Need to verify relay addresses are advertised
+- ❓ Need to test cross-network connectivity through relays 
 
 **Configuration**:
 - Sentries (node3, node7): `mode = "both"`, configured with each other as relay servers

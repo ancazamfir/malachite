@@ -6,6 +6,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use libp2p::metrics::{Metrics, Recorder};
 use libp2p::request_response::{InboundRequestId, OutboundRequestId};
+use libp2p::swarm::behaviour::toggle::Toggle;
 use libp2p::swarm::{self, SwarmEvent};
 use libp2p::{dcutr, gossipsub, identify, quic, relay, SwarmBuilder};
 use libp2p_broadcast as broadcast;
@@ -203,9 +204,37 @@ pub async fn spawn(
 ) -> Result<Handle, eyre::Report> {
     let swarm = registry.with_prefix(METRICS_PREFIX, |registry| -> Result<_, eyre::Report> {
         let builder = SwarmBuilder::with_existing_identity(keypair.clone()).with_tokio();
-        match config.transport {
-            TransportProtocol::Tcp => {
-                let behaviour = Behaviour::new_with_metrics(&config, &keypair, registry)?;
+        let mut behaviour = Behaviour::new_with_metrics(&config, &keypair, registry)?;
+        let relay_client_enabled = config.relay.enabled
+            && matches!(
+                config.relay.mode,
+                malachitebft_config::RelayMode::Client | malachitebft_config::RelayMode::Both
+            );
+
+        // Note: We use .with_relay_client() to enable dialing peers through relay circuits.
+        // Instead of calling listen_on() for reservations (which requires pre-registered relays),
+        // we DIAL cross-network peers using relay addresses like:
+        // /ip4/<relay-ip>/tcp/<port>/p2p/<relay-peer-id>/p2p-circuit/p2p/<target-peer-id>
+        match (config.transport, relay_client_enabled) {
+            (TransportProtocol::Tcp, true) => {
+                info!("Enabling relay client transport for TCP (dial-only mode)");
+                Ok(builder
+                    .with_tcp(
+                        libp2p::tcp::Config::new().nodelay(true), // Disable Nagle's algorithm
+                        libp2p::noise::Config::new,
+                        libp2p::yamux::Config::default,
+                    )?
+                    .with_dns()?
+                    .with_relay_client(libp2p::noise::Config::new, libp2p::yamux::Config::default)?
+                    .with_bandwidth_metrics(registry)
+                    .with_behaviour(|_, relay_client| {
+                        behaviour.relay_client = Toggle::from(Some(relay_client));
+                        behaviour
+                    })?
+                    .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
+                    .build())
+            }
+            (TransportProtocol::Tcp, false) => {
                 Ok(builder
                     .with_tcp(
                         libp2p::tcp::Config::new().nodelay(true), // Disable Nagle's algorithm
@@ -218,16 +247,28 @@ pub async fn spawn(
                     .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
                     .build())
             }
-            TransportProtocol::Quic => {
-                let behaviour = Behaviour::new_with_metrics(&config, &keypair, registry)?;
+            (TransportProtocol::Quic, true) => {
+                info!("Enabling relay client transport for QUIC (dial-only mode)");
+                warn!("Relay client with QUIC transport requires TCP fallback for relay circuits");
                 Ok(builder
                     .with_quic_config(|cfg| config.apply_to_quic(cfg))
                     .with_dns()?
+                    .with_relay_client(libp2p::noise::Config::new, libp2p::yamux::Config::default)?
                     .with_bandwidth_metrics(registry)
-                    .with_behaviour(|_| behaviour)?
+                    .with_behaviour(|_, relay_client| {
+                        behaviour.relay_client = Toggle::from(Some(relay_client));
+                        behaviour
+                    })?
                     .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
                     .build())
             }
+            (TransportProtocol::Quic, false) => Ok(builder
+                .with_quic_config(|cfg| config.apply_to_quic(cfg))
+                .with_dns()?
+                .with_bandwidth_metrics(registry)
+                .with_behaviour(|_| behaviour)?
+                .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
+                .build()),
         }
     })?;
 
@@ -278,6 +319,11 @@ async fn run(
         error!("Error listening on {}: {e}", config.listen_addr);
         return;
     }
+
+    // Note: We do NOT manually add external addresses for relay servers.
+    // libp2p automatically discovers and uses the actual listen addresses (e.g., specific IPs)
+    // from the NewListenAddr events. Adding 0.0.0.0 as an external address is incorrect
+    // because it's not a valid external address and causes peers to advertise the wrong IPs.
 
     if config.enable_consensus {
         if let Err(e) = pubsub::subscribe(
@@ -462,6 +508,23 @@ async fn handle_swarm_event(
         SwarmEvent::NewListenAddr { address, .. } => {
             debug!(%address, "Node is listening");
 
+            // For relay servers, add actual listen addresses (not 0.0.0.0) as external addresses
+            // This allows the relay server to provide these addresses when accepting reservations
+            let is_relay_server = config.relay.enabled
+                && matches!(
+                    config.relay.mode,
+                    malachitebft_config::RelayMode::Server | malachitebft_config::RelayMode::Both
+                );
+
+            if is_relay_server {
+                // Only add non-wildcard addresses (not 0.0.0.0 or ::)
+                let addr_str = address.to_string();
+                if !addr_str.contains("/0.0.0.0/") && !addr_str.contains("/::/") {
+                    swarm.add_external_address(address.clone());
+                    info!("Relay server: added external address {}", address);
+                }
+            }
+
             if let Err(e) = tx_event.send(Event::Listening(address)).await {
                 error!("Error sending listening event to handle: {e}");
                 return ControlFlow::Break(());
@@ -570,6 +633,20 @@ async fn handle_swarm_event(
                 }
             }
 
+            identify::Event::Pushed { peer_id, info, .. } => {
+                debug!(
+                    "Received identify push from {peer_id} with {} address(es)",
+                    info.listen_addrs.len()
+                );
+
+                // Handle pushed address updates the same way as initial Received
+                // This ensures that when peers get relay reservations, their new relay
+                // addresses are propagated through the network via Kademlia DHT
+                if info.protocol_version == config.protocol_names.consensus {
+                    state.discovery.handle_identify_push(swarm, peer_id, info);
+                }
+            }
+
             // Ignore other identify events
             _ => (),
         },
@@ -608,6 +685,10 @@ async fn handle_swarm_event(
             handle_relay_event(*event);
         }
 
+        SwarmEvent::Behaviour(NetworkEvent::RelayClient(event)) => {
+            handle_relay_client_event(*event);
+        }
+
         SwarmEvent::Behaviour(NetworkEvent::Dcutr(event)) => {
             handle_dcutr_event(event);
         }
@@ -632,18 +713,44 @@ fn handle_relay_event(event: relay::Event) {
         Event::ReservationTimedOut { src_peer_id } => {
             debug!("Relay reservation timed out for {src_peer_id}");
         }
-        Event::CircuitReqDenied { src_peer_id, dst_peer_id, status: _ } => {
+        Event::CircuitReqDenied {
+            src_peer_id,
+            dst_peer_id,
+            status: _,
+        } => {
             debug!("Relay circuit denied from {src_peer_id} to {dst_peer_id}");
         }
-        Event::CircuitReqAccepted { src_peer_id, dst_peer_id } => {
+        Event::CircuitReqAccepted {
+            src_peer_id,
+            dst_peer_id,
+        } => {
             info!("Relay circuit established from {src_peer_id} to {dst_peer_id}");
         }
-        Event::CircuitClosed { src_peer_id, dst_peer_id, error } => {
+        Event::CircuitClosed {
+            src_peer_id,
+            dst_peer_id,
+            error,
+        } => {
             debug!("Relay circuit closed between {src_peer_id} and {dst_peer_id}: {error:?}");
         }
         // Handle other variants that may exist
         _ => {
             debug!("Relay event: {event:?}");
+        }
+    }
+}
+
+fn handle_relay_client_event(event: relay::client::Event) {
+    use relay::client::Event;
+    match event {
+        Event::ReservationReqAccepted { relay_peer_id, .. } => {
+            info!("Relay client: Reservation accepted by relay {relay_peer_id}");
+        }
+        Event::OutboundCircuitEstablished { relay_peer_id, .. } => {
+            info!("Relay client: Outbound circuit established through relay {relay_peer_id}");
+        }
+        Event::InboundCircuitEstablished { src_peer_id, .. } => {
+            info!("Relay client: Inbound circuit established from {src_peer_id}");
         }
     }
 }

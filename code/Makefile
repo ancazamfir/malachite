@@ -251,6 +251,44 @@ testnet-nat: testnet-clean ## Start NAT testnet scenario
 testnet-nat-down: ## Stop NAT testnet
 	@docker compose -f docker-compose-nat.yml down > /dev/null 2>&1 || true
 
+testnet-nat-double: testnet-clean ## Start double-NAT relay testnet (2 validators behind separate NATs)
+	@echo "Setting up double-NAT relay testnet..."
+	@echo "  - node0: validator behind NAT1 (192.168.100.0/24)"
+	@echo "  - node1: validator behind NAT2 (192.168.101.0/24)"
+	@echo "  - node2: validator on public internet (10.0.1.0/24)"
+	@echo "  - node3: relay server on public internet (10.0.1.0/24)"
+	@echo ""
+	@echo "Generating base testnet structure (genesis, keys, etc.)..."
+	cargo run --release --bin informalsystems-malachitebft-example-channel -- \
+		testnet \
+		--nodes 4 \
+		--enable-discovery \
+		--bootstrap-protocol full
+	@echo ""
+	@echo "Copying generated files to deployments directory..."
+	mkdir -p deployments/volumes/malachite
+	cp -r ~/.malachite/* deployments/volumes/malachite/
+	@echo ""
+	@echo "Note: Using custom configs from nat-double-configs/ (ignoring generated configs)"
+	@echo ""
+	@echo "Starting double-NAT testnet..."
+	docker-compose -f docker-compose-double-nat.yml up -d
+	@echo ""
+	@echo "Double-NAT testnet started!"
+	@echo "  node0: http://localhost:29000/metrics (behind NAT1)"
+	@echo "  node1: http://localhost:29001/metrics (behind NAT2)"
+	@echo "  node2: http://localhost:29002/metrics (public validator)"
+	@echo "  node3: http://localhost:29003/metrics (relay server)"
+	@echo ""
+	@echo "Check relay status:"
+	@echo "  docker logs malachite_node0 | grep -E 'relay|circuit|reservation'"
+	@echo "  docker logs malachite_node1 | grep -E 'relay|circuit|reservation'"
+	@echo "  docker logs malachite_node2 | grep -E 'relay|circuit|reservation'"
+	@echo "  docker logs malachite_node3 | grep -E 'relay|circuit|reservation'"
+
+testnet-nat-double-down: ## Stop double-NAT testnet
+	@docker compose -f docker-compose-double-nat.yml down > /dev/null 2>&1 || true
+
 testnet-sentry: testnet-clean ## Start sentry node testnet scenario
 	@echo "Setting up sentry node testnet scenario..."
 	@echo "Creating deployment directories..."

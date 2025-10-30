@@ -98,6 +98,10 @@ where
         self.in_progress.contains_key(key)
     }
 
+    pub(crate) fn get_in_progress(&self, key: &U) -> Option<&V> {
+        self.in_progress.get(key)
+    }
+
     pub(crate) fn get_in_progress_mut(&mut self, key: &U) -> Option<&mut V> {
         self.in_progress.get_mut(key)
     }

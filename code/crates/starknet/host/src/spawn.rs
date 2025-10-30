@@ -284,6 +284,7 @@ async fn spawn_network_actor(
             discovery_regres: cfg.consensus.p2p.protocol_names.discovery_regres.clone(),
             sync: cfg.consensus.p2p.protocol_names.sync.clone(),
         },
+        relay: malachitebft_config::RelayConfig::default(),
     };
 
     let keypair = make_keypair(private_key);

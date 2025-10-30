@@ -146,6 +146,103 @@ where
         self.config.enabled
     }
 
+    /// Construct relay addresses for a target peer using known relay servers
+    ///
+    /// For each relay server that has been identified (has a peer ID), construct a relay address
+    /// of the form: /p2p/<relay-peer-id>/p2p-circuit/p2p/<target-peer-id>
+    ///
+    /// This allows us to dial peers in other networks through relay servers.
+    fn construct_relay_addresses(&self, target_peer_id: PeerId) -> Vec<Multiaddr> {
+        let mut relay_addrs = Vec::new();
+
+        for (maybe_relay_peer_id, relay_addrs_list) in &self.relay_servers {
+            // Only use relay servers that have been identified (we know their peer ID)
+            if let Some(relay_peer_id) = maybe_relay_peer_id {
+                // For each address of the relay server, construct a relay circuit address
+                for relay_addr in relay_addrs_list {
+                    // Construct: <relay-addr>/p2p/<relay-peer-id>/p2p-circuit/p2p/<target-peer-id>
+                    let mut circuit_addr = relay_addr.clone();
+                    circuit_addr.push(libp2p::multiaddr::Protocol::P2p(*relay_peer_id));
+                    circuit_addr.push(libp2p::multiaddr::Protocol::P2pCircuit);
+                    circuit_addr.push(libp2p::multiaddr::Protocol::P2p(target_peer_id));
+
+                    relay_addrs.push(circuit_addr);
+                }
+            }
+        }
+
+        if !relay_addrs.is_empty() {
+            debug!(
+                "Constructed {} relay address(es) for peer {} through {} relay server(s)",
+                relay_addrs.len(),
+                target_peer_id,
+                self.relay_servers.len()
+            );
+        }
+
+        relay_addrs
+    }
+
+    /// Construct relay addresses for a target peer using ourselves as the relay server
+    ///
+    /// This is used when we are a relay server sharing peer information with clients.
+    /// Instead of using relay_servers (which are relays we connect to), we use our own
+    /// addresses as the relay server.
+    fn construct_relay_addresses_via_self(
+        &self,
+        swarm: &Swarm<C>,
+        target_peer_id: PeerId,
+    ) -> Vec<Multiaddr> {
+        let our_peer_id = *swarm.local_peer_id();
+        let our_addrs: Vec<_> = swarm.listeners().cloned().collect();
+
+        debug!(
+            "construct_relay_addresses_via_self: our_peer_id={}, target_peer_id={}, our_addrs={:?}",
+            our_peer_id, target_peer_id, our_addrs
+        );
+
+        let mut relay_addrs = Vec::new();
+
+        for our_addr in our_addrs {
+            // Skip wildcard addresses (0.0.0.0, ::), loopback, and circuit addresses
+            // Circuit addresses would create invalid relay-through-relay addresses
+            let addr_str = our_addr.to_string();
+            if addr_str.contains("/0.0.0.0/")
+                || addr_str.contains("/::/")
+                || addr_str.contains("127.0.0.1")
+                || addr_str.contains("::1")
+                || addr_str.contains("/p2p-circuit/")
+            {
+                debug!("Skipping wildcard/loopback/circuit address: {}", addr_str);
+                continue;
+            }
+
+            // Construct: <our-addr>/p2p/<our-peer-id>/p2p-circuit/p2p/<target-peer-id>
+            let mut circuit_addr = our_addr.clone();
+            circuit_addr.push(libp2p::multiaddr::Protocol::P2p(our_peer_id));
+            circuit_addr.push(libp2p::multiaddr::Protocol::P2pCircuit);
+            circuit_addr.push(libp2p::multiaddr::Protocol::P2p(target_peer_id));
+
+            debug!("Constructed relay circuit address: {}", circuit_addr);
+            relay_addrs.push(circuit_addr);
+        }
+
+        if relay_addrs.is_empty() {
+            debug!(
+                "Failed to construct relay addresses for peer {} via ourselves (no suitable listen addresses)",
+                target_peer_id
+            );
+        } else {
+            debug!(
+                "Constructed {} relay address(es) for peer {} via ourselves as relay",
+                relay_addrs.len(),
+                target_peer_id
+            );
+        }
+
+        relay_addrs
+    }
+
     /// Trigger rediscovery for Full mode
     ///
     /// This is called on each periodic maintenance tick (every 5s) to send PeersRequest

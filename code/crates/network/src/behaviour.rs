@@ -24,6 +24,7 @@ pub enum NetworkEvent {
     Sync(sync::Event),
     Discovery(Box<discovery::NetworkEvent>),
     Relay(Box<relay::Event>),
+    RelayClient(Box<relay::client::Event>),
     Dcutr(dcutr::Event),
 }
 
@@ -69,6 +70,12 @@ impl From<relay::Event> for NetworkEvent {
     }
 }
 
+impl From<relay::client::Event> for NetworkEvent {
+    fn from(event: relay::client::Event) -> Self {
+        Self::RelayClient(Box::new(event))
+    }
+}
+
 impl From<dcutr::Event> for NetworkEvent {
     fn from(event: dcutr::Event) -> Self {
         Self::Dcutr(event)
@@ -85,6 +92,7 @@ pub struct Behaviour {
     pub sync: Toggle<sync::Behaviour>,
     pub discovery: Toggle<discovery::Behaviour>,
     pub relay: Toggle<relay::Behaviour>,
+    pub relay_client: Toggle<relay::client::Behaviour>,
     pub dcutr: Toggle<dcutr::Behaviour>,
 }
 
@@ -173,9 +181,13 @@ impl Behaviour {
         // and dialing all addresses learned through Identify, including loopback addresses.
         // Addresses are manually filtered in discovery/handlers/identify.rs before storing them
         // in discovered_peers, and this ensures libp2p only dials those filtered addresses.
+        //
+        // Enable push_listen_addr_updates to automatically notify connected peers when our
+        // listen addresses change (e.g., after obtaining relay reservations)
         let identify = identify::Behaviour::new(
             identify::Config::new(config.protocol_names.consensus.clone(), keypair.public())
-                .with_cache_size(0),
+                .with_cache_size(0)
+                .with_push_listen_addr_updates(true),
         );
 
         let ping = ping::Behaviour::new(ping::Config::new().with_interval(Duration::from_secs(5)));
@@ -225,11 +237,30 @@ impl Behaviour {
             None
         };
 
-        // Enable relay if relay is enabled (works for both server and client modes)
-        let relay = if config.relay.enabled {
+        // Enable relay server if relay is enabled and mode is Server or Both
+        let relay = if config.relay.enabled
+            && matches!(
+                config.relay.mode,
+                malachitebft_config::RelayMode::Server | malachitebft_config::RelayMode::Both
+            ) {
+            tracing::info!("Enabling relay server behavior with increased circuit limits");
+
+            // Configure relay for permanent connections with validators behind NAT
+            // These connections must stay up indefinitely for consensus to work
+            // - Default max_circuit_bytes is only 128 KB (1 << 17), far too small
+            // - Default max_circuit_duration is 2 minutes, too short for permanent connectivity
+            // For production NAT scenarios:
+            // - Set byte limit high enough for sustained consensus traffic over extended periods
+            // - Set duration to 1 hour (can be renewed, libp2p handles reconnection)
+            let relay_config = relay::Config {
+                max_circuit_bytes: 500 * 1024 * 1024, // 500 MB for long-running connections
+                max_circuit_duration: Duration::from_secs(3600), // 1 hour
+                ..relay::Config::default()
+            };
+
             Some(relay::Behaviour::new(
                 keypair.public().to_peer_id(),
-                relay::Config::default(),
+                relay_config,
             ))
         } else {
             None
@@ -240,8 +271,7 @@ impl Behaviour {
             && matches!(
                 config.relay.mode,
                 malachitebft_config::RelayMode::Client | malachitebft_config::RelayMode::Both
-            )
-        {
+            ) {
             Some(dcutr::Behaviour::new(keypair.public().to_peer_id()))
         } else {
             None
@@ -255,6 +285,7 @@ impl Behaviour {
             broadcast: Toggle::from(broadcast),
             discovery: Toggle::from(discovery),
             relay: Toggle::from(relay),
+            relay_client: Toggle::from(None), // Will be set by with_relay_client()
             dcutr: Toggle::from(dcutr),
         })
     }
