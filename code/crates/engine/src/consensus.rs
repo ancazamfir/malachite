@@ -534,18 +534,13 @@ where
                             error!(%from, "Error when processing vote: {e}");
                         }
 
-                        if let Some((address, evidence)) =
-                            state.consensus.as_ref().and_then(|consensus| {
-                                consensus.driver.vote_evidence().is_last_equivocation(&vote)
-                            })
+                        if state
+                            .consensus
+                            .as_ref()
+                            .and_then(|c| c.driver.vote_evidence().is_last_equivocation(&vote))
+                            .is_some()
                         {
                             self.metrics.equivocation_votes.inc();
-
-                            self.tx_event.send(|| Event::VoteEquivocationEvidence {
-                                vote_height: vote.height(),
-                                address,
-                                evidence,
-                            });
                         }
                     }
 
@@ -570,16 +565,15 @@ where
                             error!(%from, "Error when processing proposal: {e}");
                         }
 
-                        if let Some((address, evidence)) = state.consensus.as_ref().and_then(|c| {
-                            c.driver.proposal_evidence().is_last_equivocation(&proposal)
-                        }) {
+                        if state
+                            .consensus
+                            .as_ref()
+                            .and_then(|c| {
+                                c.driver.proposal_evidence().is_last_equivocation(&proposal)
+                            })
+                            .is_some()
+                        {
                             self.metrics.equivocation_proposals.inc();
-
-                            self.tx_event.send(|| Event::ProposalEquivocationEvidence {
-                                proposal_height: proposal.height(),
-                                address,
-                                evidence,
-                            });
                         }
                     }
 
