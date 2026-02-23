@@ -14,8 +14,8 @@ use crate::app::types::core::Context;
 use crate::msgs::{ConsensusRequest, NetworkRequest};
 use crate::{Channels, EngineBuilder};
 
-pub use malachitebft_engine::network::NetworkIdentity;
 pub use crate::app::types::Keypair;
+pub use malachitebft_engine::network::NetworkIdentity;
 
 pub use crate::builder::{
     ConsensusContext, NetworkContext, RequestContext, SyncContext, WalContext,

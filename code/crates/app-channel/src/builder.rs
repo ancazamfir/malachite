@@ -19,13 +19,13 @@ use malachitebft_engine::wal::WalRef;
 use malachitebft_signing::{SigningProvider, SigningProviderExt};
 
 use crate::app::config::NodeConfig;
-use crate::app::types::Keypair;
 use crate::app::metrics::{Metrics, SharedRegistry};
 use crate::app::spawn::{
     spawn_consensus_actor, spawn_node_actor, spawn_sync_actor, spawn_wal_actor,
 };
 use crate::app::types::codec;
 use crate::app::types::core::Context;
+use crate::app::types::Keypair;
 use crate::msgs::NetworkMsg;
 use crate::spawn::{spawn_host_actor, spawn_network_actor};
 use crate::{Channels, EngineHandle};
@@ -914,7 +914,11 @@ mod tests {
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -929,7 +933,11 @@ mod tests {
             .with_custom_wal(fake())
             .with_custom_network(fake(), fake())
             .with_custom_sync(fake())
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -944,7 +952,11 @@ mod tests {
             .with_custom_wal(fake())
             .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -959,7 +971,11 @@ mod tests {
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_custom_network(fake(), fake())
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -974,7 +990,11 @@ mod tests {
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
             .with_custom_sync(fake())
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -989,7 +1009,11 @@ mod tests {
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
             .with_no_sync()
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -1004,7 +1028,11 @@ mod tests {
             .with_custom_wal(fake())
             .with_custom_network(fake(), fake())
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -1019,7 +1047,11 @@ mod tests {
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_custom_network(fake(), fake())
             .with_custom_sync(fake())
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -1031,7 +1063,11 @@ mod tests {
         let ctx = TestContext::default();
 
         let _ = EngineBuilder::new(ctx, Config)
-            .with_default_consensus(ConsensusContext::new(fake(), fake(), fake::<Ed25519Provider>()))
+            .with_default_consensus(ConsensusContext::new(
+                fake(),
+                fake(),
+                fake::<Ed25519Provider>(),
+            ))
             .with_default_request(RequestContext::new(100))
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
