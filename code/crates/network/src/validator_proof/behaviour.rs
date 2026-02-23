@@ -19,9 +19,6 @@ use tracing::{debug, trace, warn};
 
 use super::protocol;
 
-/// Protocol name for validator proof.
-pub const PROTOCOL_NAME: StreamProtocol = StreamProtocol::new("/malachitebft-validator-proof/v1");
-
 /// Events emitted by the Validator Proof behaviour.
 #[derive(Debug)]
 pub enum Event {
@@ -53,6 +50,9 @@ pub struct Behaviour {
     /// Inner stream behaviour.
     inner: stream::Behaviour,
 
+    /// Protocol name for validator proof (e.g. `/malachitebft-validator-proof/v1`).
+    protocol: StreamProtocol,
+
     /// Proof bytes to send (if we're a validator).
     proof_bytes: Option<Bytes>,
 
@@ -75,12 +75,13 @@ pub struct Behaviour {
 }
 
 impl Behaviour {
-    /// Create a new behaviour.
-    pub fn new() -> Self {
+    /// Create a new behaviour with the given protocol name.
+    pub fn new(protocol: StreamProtocol) -> Self {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
 
         Self {
             inner: stream::Behaviour::new(),
+            protocol,
             proof_bytes: None,
             events_rx,
             events_tx,
@@ -89,6 +90,12 @@ impl Behaviour {
             proofs_received: HashSet::new(),
             listening: false,
         }
+    }
+
+    /// Create a behaviour with the default protocol name (for tests or when not using config).
+    /// Prefer [`new`](Self::new) with the protocol from config to match sync/identify.
+    pub fn with_default_protocol() -> Self {
+        Self::new(StreamProtocol::new("/malachitebft-validator-proof/v1"))
     }
 
     /// Set the proof bytes to send when connecting to peers.
@@ -122,9 +129,10 @@ impl Behaviour {
 
         let control = self.inner.new_control();
         let events_tx = self.events_tx.clone();
+        let protocol = self.protocol.clone();
 
         tokio::spawn(async move {
-            let event = protocol::send_proof(peer_id, proof_bytes, control).await;
+            let event = protocol::send_proof(peer_id, proof_bytes, control, protocol).await;
             let _ = events_tx.send(event);
         });
 
@@ -139,8 +147,11 @@ impl Behaviour {
 
         let control = self.inner.new_control();
         let events_tx = self.events_tx.clone();
+        let protocol = self.protocol.clone();
 
-        tokio::spawn(protocol::accept_incoming_streams(control, events_tx));
+        tokio::spawn(async move {
+            protocol::accept_incoming_streams(control, events_tx, protocol).await;
+        });
     }
 
     fn on_connection_established(&mut self, conn: &ConnectionEstablished<'_>) {
@@ -188,7 +199,7 @@ impl Behaviour {
 
 impl Default for Behaviour {
     fn default() -> Self {
-        Self::new()
+        Self::with_default_protocol()
     }
 }
 

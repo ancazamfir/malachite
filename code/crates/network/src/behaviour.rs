@@ -203,11 +203,15 @@ impl Behaviour {
         // Build agent_version for peer identification (moniker only)
         let agent_version = format!("moniker={}", identity.moniker);
 
+        // Validate consensus protocol name and use it for identify (and compatibility check in event loop)
+        let consensus_protocol =
+            libp2p::StreamProtocol::try_from_owned(config.protocol_names.consensus.clone())?;
+
         // Use signed peer records to prevent peer ID spoofing.
         // Peers will sign their addresses with their private key, allowing verification.
         let identify = identify::Behaviour::new(
             identify::Config::new_with_signed_peer_record(
-                config.protocol_names.consensus.clone(),
+                consensus_protocol.to_string(),
                 &identity.keypair,
             )
             .with_agent_version(agent_version),
@@ -274,9 +278,15 @@ impl Behaviour {
         };
 
         // Enable validator proof verification if consensus is enabled
-        let validator_proof = config
-            .enable_consensus
-            .then(validator_proof::Behaviour::new);
+        let validator_proof = if config.enable_consensus {
+            let protocol = libp2p::StreamProtocol::try_from_owned(
+                config.protocol_names.validator_proof.clone(),
+            )?;
+            Some(validator_proof::Behaviour::new(protocol))
+        } else {
+            None
+        };
+
         // Limits for transport layer defense against connection attacks
         let connection_limits = connection_limits::Behaviour::new(connection_limits(config));
 

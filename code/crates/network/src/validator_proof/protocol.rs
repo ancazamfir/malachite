@@ -7,15 +7,17 @@ use libp2p_stream as stream;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
-use super::behaviour::{Error, Event, PROTOCOL_NAME};
+use super::behaviour::{Error, Event};
 use super::codec;
+use libp2p::StreamProtocol;
 
 /// Accept and handle incoming proof streams.
 pub async fn accept_incoming_streams(
     mut control: stream::Control,
     events_tx: mpsc::UnboundedSender<Event>,
+    protocol: StreamProtocol,
 ) {
-    let incoming = match control.accept(PROTOCOL_NAME) {
+    let incoming = match control.accept(protocol) {
         Ok(incoming) => incoming,
         Err(error) => {
             error!(%error, "Failed to accept incoming validator proof streams");
@@ -55,10 +57,15 @@ async fn recv_proof(peer: PeerId, stream: Stream) -> Event {
 }
 
 /// Send our proof to a peer.
-pub async fn send_proof(peer: PeerId, proof_bytes: Bytes, mut control: stream::Control) -> Event {
+pub async fn send_proof(
+    peer: PeerId,
+    proof_bytes: Bytes,
+    mut control: stream::Control,
+    protocol: StreamProtocol,
+) -> Event {
     debug!(%peer, "Opening stream to send validator proof");
 
-    let stream = match control.open_stream(peer, PROTOCOL_NAME).await {
+    let stream = match control.open_stream(peer, protocol).await {
         Ok(stream) => stream,
         Err(error) => {
             error!(%peer, %error, "Failed to open stream for validator proof");
