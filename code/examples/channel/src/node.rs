@@ -13,7 +13,7 @@ use malachitebft_app_channel::app::metrics::SharedRegistry;
 use malachitebft_app_channel::app::types::core::{Height as _, VotingPower};
 use malachitebft_app_channel::app::types::Keypair;
 use malachitebft_app_channel::{
-    ConsensusContext, EngineHandle, NetworkContext, RequestContext, WalContext,
+    ConsensusContext, EngineHandle, NetworkContext, RequestContext, SyncContext, WalContext,
 };
 use malachitebft_test::node::{Node, NodeHandle};
 use malachitebft_test::traits::{
@@ -29,7 +29,7 @@ use malachitebft_test::{
 };
 use malachitebft_test_cli::metrics;
 
-use crate::config::{load_config, Config};
+use crate::config::{load_config, Config, ValidatorRotationConfig};
 use crate::metrics::DbMetrics;
 use crate::state::State;
 use crate::store::Store;
@@ -137,6 +137,7 @@ impl Node for App {
                 public_key_bytes,
                 self.get_signing_provider(private_key.clone()),
             ),
+            SyncContext::new(ProtobufCodec),
             RequestContext::new(100), // Request channel size
         )
         .await?;
@@ -162,6 +163,7 @@ impl Node for App {
             address,
             start_height,
             store,
+            config.validator_rotation.clone(),
         );
 
         let span = tracing::error_span!("node", moniker = %config.moniker);
@@ -285,5 +287,6 @@ fn make_config(index: usize, total: usize, settings: MakeConfigSettings) -> Conf
         runtime: settings.runtime,
         logging: LoggingConfig::default(),
         value_sync: ValueSyncConfig::default(),
+        validator_rotation: ValidatorRotationConfig::default(),
     }
 }
