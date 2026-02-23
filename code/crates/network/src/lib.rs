@@ -622,12 +622,7 @@ fn add_explicit_peer_to_gossipsub(
     peer_id: libp2p::PeerId,
     connection_id: libp2p::swarm::ConnectionId,
     info: &identify::Info,
-    enable_explicit_peering: bool,
 ) {
-    if !enable_explicit_peering {
-        return;
-    }
-
     let peer_type = state.peer_type(&peer_id, connection_id, info);
     if peer_type.is_persistent() {
         if let Some(gossipsub) = swarm.behaviour_mut().gossipsub.as_mut() {
@@ -776,15 +771,10 @@ async fn handle_swarm_event(
                     let score = state.update_peer(peer_id, connection_id, &info);
                     set_peer_score(swarm, peer_id, score);
 
-                    // Add persistent peers as explicit peers for guaranteed delivery
-                    add_explicit_peer_to_gossipsub(
-                        swarm,
-                        state,
-                        peer_id,
-                        connection_id,
-                        &info,
-                        config.gossipsub.enable_explicit_peering,
-                    );
+                    // If enabled, add persistent peers as explicit peers for guaranteed delivery
+                    if config.gossipsub.enable_explicit_peering {
+                        add_explicit_peer_to_gossipsub(swarm, state, peer_id, connection_id, &info);
+                    }
 
                     if !is_already_connected {
                         if let Err(e) = tx_event
