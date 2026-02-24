@@ -8,7 +8,7 @@ use malachitebft_signing::{SigningProvider, SigningProviderExt};
 use malachitebft_test::utils::validators::{make_validators, make_validators_seeded};
 use malachitebft_test::{Ed25519Provider, Height, Proposal, TestContext, ValidatorSet, Value};
 
-use informalsystems_malachitebft_core_driver::{Driver, Input, Output};
+use arc_malachitebft_core_driver::{Driver, Input, Output};
 
 use malachitebft_core_state_machine::state::Step;
 
