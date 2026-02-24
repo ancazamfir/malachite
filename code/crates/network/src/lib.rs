@@ -620,20 +620,17 @@ fn add_explicit_peer_to_gossipsub(
     swarm: &mut swarm::Swarm<Behaviour>,
     state: &State,
     peer_id: libp2p::PeerId,
-    connection_id: libp2p::swarm::ConnectionId,
-    info: &identify::Info,
 ) {
-    let peer_type = state.peer_type(&peer_id, connection_id, info);
-    if peer_type.is_persistent() {
+    let Some(peer_info) = state.peer_info.get(&peer_id) else {
+        return;
+    };
+
+    if peer_info.peer_type.is_persistent() {
         if let Some(gossipsub) = swarm.behaviour_mut().gossipsub.as_mut() {
             gossipsub.add_explicit_peer(&peer_id);
-            // Get moniker from state if available, otherwise use peer_id
-            let moniker = state
-                .peer_info
-                .get(&peer_id)
-                .map(|p| p.moniker.as_str())
-                .unwrap_or("unknown");
-            state.metrics.record_explicit_peer(&peer_id, moniker);
+            state
+                .metrics
+                .record_explicit_peer(&peer_id, &peer_info.moniker);
             info!("Added persistent peer {peer_id} as explicit peer in gossipsub");
         }
     }
@@ -718,10 +715,14 @@ async fn handle_swarm_event(
                 .handle_closed_connection(swarm, peer_id, connection_id);
 
             if num_established == 0 {
-                // Mark explicit peer as stale if this peer was one
+                // Remove explicit peer from gossipsub and mark metric stale when this peer was one
                 if config.gossipsub.enable_explicit_peering {
                     if let Some(peer_info) = state.peer_info.get(&peer_id) {
                         if peer_info.peer_type.is_persistent() {
+                            if let Some(gossipsub) = swarm.behaviour_mut().gossipsub.as_mut() {
+                                gossipsub.remove_explicit_peer(&peer_id);
+                                info!("Removed persistent peer {peer_id} from explicit peers in gossipsub");
+                            }
                             state
                                 .metrics
                                 .mark_explicit_peer_stale(&peer_id, &peer_info.moniker);
@@ -773,7 +774,7 @@ async fn handle_swarm_event(
 
                     // If enabled, add persistent peers as explicit peers for guaranteed delivery
                     if config.gossipsub.enable_explicit_peering {
-                        add_explicit_peer_to_gossipsub(swarm, state, peer_id, connection_id, &info);
+                        add_explicit_peer_to_gossipsub(swarm, state, peer_id);
                     }
 
                     if !is_already_connected {

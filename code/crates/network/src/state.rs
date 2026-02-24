@@ -414,8 +414,8 @@ impl State {
             agent_info.address.clone()
         };
 
-        // If peer already exists (additional connection), just update Identify-provided fields.
-        // Keep existing state since they never fully disconnected.
+        // If peer already exists (additional connection), update Identify-provided fields.
+        // Keep existing state (topics) since they never fully disconnected.
         if let Some(existing) = self.peer_info.get_mut(&peer_id) {
             let old_peer_info = existing.clone();
             existing.moniker = agent_info.moniker;
@@ -426,11 +426,14 @@ impl State {
                 existing.address = address;
                 existing.connection_direction = connection_direction;
             }
-            // Preserve: peer_type, consensus_address, score, topics
+            // Re-evaluate peer type and consensus address with current state
+            existing.peer_type = peer_type;
+            existing.consensus_address = consensus_address;
+            existing.score = crate::peer_scoring::get_peer_score(peer_type);
 
             self.metrics
                 .update_peer_labels(&peer_id, &old_peer_info, existing);
-            return crate::peer_scoring::get_peer_score(existing.peer_type);
+            return existing.score;
         }
 
         // New peer - create entry
