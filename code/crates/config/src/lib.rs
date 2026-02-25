@@ -306,7 +306,6 @@ pub struct GossipSubConfig {
 
     /// Enable flood publishing.
     /// When enabled the publisher sends the messages to all known peers, not just mesh peers.
-    /// When enable_explicit_peering is true, enable_flood_publish is forced to false.
     enable_flood_publish: bool,
 }
 
@@ -365,17 +364,9 @@ impl GossipSubConfig {
             self.mesh_outbound_min = max(1, min(self.mesh_n / 2, self.mesh_n_low - 1));
         }
 
-        // When explicit peering is enabled, force flood_publish to false. Without this, flood_publish
-        // would also send to non-persistent peers we're connected to (e.g. nodes that connected to us).
-        // We avoid that redundancy since explicit peers already guarantee validator-to-validator delivery.
-        if self.enable_explicit_peering {
-            if self.enable_flood_publish {
-                tracing::warn!(
-                    "flood_publish is forced to false when explicit peering is enabled, ignoring config setting"
-                );
-            }
-            self.enable_flood_publish = false;
-        }
+        // Both flood_publish and explicit_peering can be enabled together.
+        // flood_publish sends to all known peers on publish, explicit peering ensures
+        // persistent peers always receive forwarded messages even if outside the mesh.
     }
 
     pub fn mesh_n(&self) -> usize {
