@@ -256,9 +256,60 @@ All cleared when last connection to peer closes, allowing fresh exchange on reco
          |                                            |
 ```
 
-## Implementation Notes
+## Upgrade Strategy
+
+This protocol replaces `agent_version`-based validator classification with cryptographic proofs.
+
+### What changed
+
+| | Old behavior (`main`) | New behavior (`validator-proof`) |
+|---|---|---|
+| `agent_version` content | `moniker=X,address=Y` | `moniker=X` (no address) |
+| Validator classification | Match `address` from `agent_version` against validator set | Cryptographic proof via `/malachitebft-validator-proof/v1` |
+
+### Mixed network impact
+
+During a rolling upgrade, old and new nodes coexist. The following peer classification
+mismatches occur:
+
+| Scenario | Classification | Correct? |
+|---|---|---|
+| **New node → new validator** | Proof received → `validator` | Yes |
+| **New node → old validator** | No proof, no address in `agent_version` → `full_node` | **No** (under-classified) |
+| **Old node → new validator** | No address in `agent_version` → `full_node` | **No** (under-classified) |
+| **Old node → old validator** | Address in `agent_version` → `validator` | Yes |
+
+In a mixed network, validators running different versions will be classified as `full_node`
+by peers on the other version. This affects:
+
+- **GossipSub scoring** (if enabled): Misclassified validators receive a lower score, making
+  them more likely to be pruned from the mesh
+- **Metrics and observability**: `discovered_peers` metric shows incorrect `peer_type`
+
+This does **not** affect:
+
+- **Consensus safety or liveness**: Consensus messages are delivered via GossipSub topic
+  subscriptions regardless of peer type classification. A lower score may delay message
+  delivery but does not prevent it.
+- **Sync**: Sync operates independently of peer type classification.
+
+### Recommended upgrade procedure
+
+1. **Upgrade all nodes** to the new version. During the upgrade window, expect degraded
+   peer classification (validators seen as `full_node` across version boundaries).
+2. Once all nodes are upgraded, the validator proof protocol takes effect and all validators
+   are correctly classified.
+
+Falling back to `agent_version`-based classification was considered but rejected as insecure.
+A malicious peer can claim any validator's address in `agent_version` without cryptographic
+proof, which is the exact attack this protocol prevents.
+
+## Implementation Summary
 
 - The protocol is enabled when `config.enable_consensus = true`
 - Sync-only nodes do not enable the protocol
 - Proof is only sent when we have `proof_bytes` set (i.e., we're a validator)
 - When leaving the validator set, `clear_proof()` is called to stop sending proofs to new connections
+- When the validator set changes, all peers with stored proofs are re-evaluated (`reclassify_peers`).
+  Peers whose public key is no longer in the set are demoted (peer type and GossipSub score updated).
+
