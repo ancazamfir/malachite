@@ -12,14 +12,12 @@ mod utils;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProtocolNames {
     pub consensus: String,
-
     pub discovery_kad: String,
-
     pub discovery_regres: String,
-
     pub sync: String,
 
     pub validator_proof: String,
+    pub broadcast: String,
 }
 
 impl Default for ProtocolNames {
@@ -30,6 +28,7 @@ impl Default for ProtocolNames {
             discovery_regres: "/malachitebft-discovery/reqres/v1beta1".to_string(),
             sync: "/malachitebft-sync/v1beta1".to_string(),
             validator_proof: "/malachitebft-validator-proof/v1".to_string(),
+            broadcast: "/malachitebft-broadcast/v1beta1".to_string(),
         }
     }
 }
@@ -586,6 +585,10 @@ fn default_consensus_enabled() -> bool {
     true
 }
 
+fn default_queue_capacity() -> usize {
+    10
+}
+
 /// Consensus configuration options
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConsensusConfig {
@@ -602,12 +605,11 @@ pub struct ConsensusConfig {
     /// Message types that can carry values
     pub value_payload: ValuePayload,
 
-    /// Size of the consensus input queue
-    ///
-    /// # Deprecated
-    /// This setting is deprecated and will be removed in the future.
-    /// The queue capacity is now derived from the `sync.parallel_requests` setting.
-    #[serde(default)]
+    /// Size of the gossip input queue (number of unique heights).
+    /// Controls how many unique future heights of gossip messages
+    /// (votes, proposals, proposed values) can be buffered.
+    /// Default: 10
+    #[serde(default = "default_queue_capacity")]
     pub queue_capacity: usize,
 }
 
@@ -617,7 +619,7 @@ impl Default for ConsensusConfig {
             enabled: true,
             p2p: P2pConfig::default(),
             value_payload: ValuePayload::default(),
-            queue_capacity: 0,
+            queue_capacity: default_queue_capacity(),
         }
     }
 }
@@ -873,6 +875,7 @@ mod tests {
             discovery_regres: "/custom-discovery/reqres/v1".to_string(),
             sync: "/custom-sync/v1".to_string(),
             validator_proof: "/custom-validator-proof/v1".to_string(),
+            broadcast: "/custom-broadcast/v1".to_string(),
         };
 
         let json = serde_json::to_string(&protocol_names).unwrap();
@@ -896,6 +899,7 @@ mod tests {
             discovery_regres: "/test-network/discovery/reqres/v1".to_string(),
             sync: "/test-network/sync/v1".to_string(),
             validator_proof: "/test-network/validator-proof/v1".to_string(),
+            broadcast: "/test-network/broadcast/v1".to_string(),
         };
 
         let config_with_custom = P2pConfig {
@@ -930,6 +934,7 @@ mod tests {
         discovery_regres = "/custom-network/discovery/reqres/v2"
         sync = "/custom-network/sync/v2"
         validator_proof = "/custom-network/validator-proof/v2"
+        broadcast = "/custom-network/broadcast/v2"
         
         [p2p.protocol]
         type = "gossipsub"
@@ -953,6 +958,10 @@ mod tests {
         assert_eq!(
             config.p2p.protocol_names.validator_proof,
             "/custom-network/validator-proof/v2"
+        );
+        assert_eq!(
+            config.p2p.protocol_names.broadcast,
+            "/custom-network/broadcast/v2"
         );
     }
 

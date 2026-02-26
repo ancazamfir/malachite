@@ -62,6 +62,7 @@ pub struct ProtocolNames {
     pub discovery_regres: String,
     pub sync: String,
     pub validator_proof: String,
+    pub broadcast: String,
 }
 
 impl Default for ProtocolNames {
@@ -72,6 +73,7 @@ impl Default for ProtocolNames {
             discovery_regres: "/malachitebft-discovery/reqres/v1beta1".to_string(),
             sync: "/malachitebft-sync/v1beta1".to_string(),
             validator_proof: "/malachitebft-validator-proof/v1".to_string(),
+            broadcast: "/malachitebft-broadcast/v1beta1".to_string(),
         }
     }
 }

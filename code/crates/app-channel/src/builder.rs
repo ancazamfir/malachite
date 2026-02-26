@@ -803,7 +803,6 @@ where
             self.ctx.clone(),
             consensus_ctx.address,
             self.config.consensus().clone(),
-            self.config.value_sync(),
             Box::new(consensus_ctx.signing_provider),
             network.clone(),
             connector.clone(),
