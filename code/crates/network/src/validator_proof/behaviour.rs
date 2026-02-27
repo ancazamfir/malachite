@@ -37,10 +37,6 @@ pub enum Event {
 pub enum Error {
     #[error("IO error: {0}")]
     Io(String),
-    #[error("Peer ID mismatch: expected {expected}, got {actual}")]
-    PeerIdMismatch { expected: String, actual: String },
-    #[error("Invalid peer ID in proof")]
-    InvalidPeerId,
     #[error("Stream closed unexpectedly")]
     UnexpectedEof,
 }
@@ -303,7 +299,8 @@ impl NetworkBehaviour for Behaviour {
             }
         }
 
-        // Poll the inner behavior
+        // Poll the inner behaviour (stream::Behaviour does not emit events,
+        // but polling it is required to drive its internal state machine)
         let _ = self.inner.poll(cx);
 
         Poll::Pending

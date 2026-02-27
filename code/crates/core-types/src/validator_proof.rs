@@ -14,7 +14,7 @@ const POV_SEPARATOR: &[u8] = b"PoV";
 /// This allows nodes to cryptographically verify that a peer claiming to be
 /// a validator actually controls the corresponding consensus private key.
 ///
-/// The proof binds a network ID (peer_id) to a consensus public key,
+/// The proof binds a libp2p peer ID to a consensus public key,
 /// signed by the corresponding consensus private key. This allows immediate
 /// signature verification without needing to look up the public key from the
 /// validator set.
@@ -22,7 +22,7 @@ const POV_SEPARATOR: &[u8] = b"PoV";
 pub struct ValidatorProof<Ctx: Context> {
     /// The validator's consensus public key (raw bytes)
     pub public_key: Vec<u8>,
-    /// The libp2p peer ID bytes (network_id)
+    /// The libp2p peer ID bytes
     pub peer_id: Vec<u8>,
     /// Signature over (public_key, peer_id) using the validator's consensus key
     pub signature: Signature<Ctx>,

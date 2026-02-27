@@ -80,7 +80,7 @@
 //! - Retry allowed on next connection or trigger
 //!
 //! **Receive failures** (`ProofReceiveFailed`):
-//! - Cannot read/decode stream → behaviour emits `CloseConnection` → DISCONNECT
+//! - Cannot read stream (framing error) → behaviour emits `CloseConnection` → DISCONNECT
 //!
 //! **Anti-spam** (behaviour level):
 //! - Duplicate proof from same peer → behaviour emits `CloseConnection` → DISCONNECT

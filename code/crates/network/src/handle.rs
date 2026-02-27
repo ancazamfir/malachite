@@ -81,7 +81,7 @@ impl CtrlHandle {
     }
 
     /// Send a validator proof verification result.
-    /// If result is Acknowledged, provide the public_key to store the proof.
+    /// If result is Valid, provide the public_key to store the proof.
     pub async fn validator_proof_verified(
         &self,
         peer_id: crate::PeerId,

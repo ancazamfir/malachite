@@ -13,7 +13,8 @@ use malachitebft_app_channel::app::metrics::SharedRegistry;
 use malachitebft_app_channel::app::types::core::{Height as _, VotingPower};
 use malachitebft_app_channel::app::types::Keypair;
 use malachitebft_app_channel::{
-    ConsensusContext, EngineHandle, NetworkContext, RequestContext, SyncContext, WalContext,
+    ConsensusContext, EngineBuilder, EngineHandle, NetworkContext, RequestContext, SyncContext,
+    WalContext,
 };
 use malachitebft_test::node::{Node, NodeHandle};
 use malachitebft_test::traits::{
@@ -127,20 +128,22 @@ impl Node for App {
         let genesis = self.load_genesis()?;
 
         let public_key_bytes = public_key.as_bytes().to_vec();
-        let (mut channels, engine_handle) = malachitebft_app_channel::start_engine(
-            ctx.clone(),
-            config.clone(),
-            WalContext::new(wal_path, ProtobufCodec),
-            NetworkContext::new(config.moniker.clone(), keypair, ProtobufCodec),
-            ConsensusContext::new(
+        let (mut channels, engine_handle) = EngineBuilder::new(ctx.clone(), config.clone())
+            .with_default_wal(WalContext::new(wal_path, ProtobufCodec))
+            .with_default_network(NetworkContext::new(
+                config.moniker.clone(),
+                keypair,
+                ProtobufCodec,
+            ))
+            .with_default_consensus(ConsensusContext::new(
                 address,
                 public_key_bytes,
                 self.get_signing_provider(private_key.clone()),
-            ),
-            SyncContext::new(ProtobufCodec),
-            RequestContext::new(100), // Request channel size
-        )
-        .await?;
+            ))
+            .with_default_sync(SyncContext::new(ProtobufCodec))
+            .with_default_request(RequestContext::new(100))
+            .build()
+            .await?;
 
         let tx_event = channels.events.clone();
 

@@ -146,7 +146,7 @@ pub struct NetworkIdentity {
 /// Validator identity with optional pre-serialized proof.
 #[derive(Clone, Debug)]
 pub struct ValidatorIdentity {
-    /// The consensus address (as string for Identify protocol compatibility)
+    /// The consensus address (used for local node metrics and validator set matching)
     pub address: String,
     /// Pre-serialized validator proof bytes for broadcasting (optional)
     pub proof_bytes: Option<Bytes>,
@@ -312,7 +312,7 @@ pub enum CtrlMsg {
     SyncRequest(PeerId, Bytes, oneshot::Sender<OutboundRequestId>),
     SyncReply(InboundRequestId, Bytes),
     UpdateValidatorSet(Vec<ValidatorInfo>),
-    /// Validator proof verification result. If Acknowledged, public_key should be Some.
+    /// Validator proof verification result. If Valid, public_key should be Some.
     /// The public_key is stored and used to check validator set membership.
     ValidatorProofVerified {
         peer_id: PeerId,
@@ -626,14 +626,14 @@ async fn handle_ctrl_msg(
                 set_peer_score(swarm, peer_id, new_score);
             }
 
-            // Update behaviour's validator proof based on validator status
+            // Update validator proof behaviour based on validator status
             if let Some(validator_proof) = swarm.behaviour_mut().validator_proof.as_mut() {
                 if state.local_node.is_validator {
                     // Set proof if we're a validator
                     if let Some(proof_bytes) = &state.local_node.proof_bytes {
                         validator_proof.set_proof(proof_bytes.clone());
                     }
-                    // Send to all connected peers (behaviour handles dedup via proofs_sent)
+                    // Send to all identified peers (behaviour handles dedup via proofs_sent)
                     for &peer_id in state.peer_info.keys() {
                         validator_proof.send_proof(peer_id);
                     }

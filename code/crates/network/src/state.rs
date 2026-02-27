@@ -306,7 +306,7 @@ impl State {
         let old_peer_info = peer_info.clone();
 
         // Store the public key from the verified proof
-        peer_info.consensus_public_key = Some(public_key.clone());
+        peer_info.consensus_public_key = Some(public_key);
 
         // Set consensus_address only if in validator set (for display/metrics)
         peer_info.consensus_address = validator_address.map(|s| s.to_string());
@@ -345,10 +345,10 @@ impl State {
         }
     }
 
-    /// Determine the peer type based on peer ID and identify info
+    /// Determine the peer type based on peer ID and connection info.
     ///
-    /// Note: Validator status is determined via validator proof protocol,
-    /// not from the Identify protocol. This only returns persistent peer status.
+    /// Validator status is determined exclusively via the validator proof protocol.
+    /// The agent_version field is NOT used for classification to prevent spoofing.
     pub(crate) fn peer_type(
         &self,
         peer_id: &libp2p::PeerId,
@@ -357,7 +357,7 @@ impl State {
         let is_persistent = self.persistent_peer_ids.contains(peer_id)
             || self.is_persistent_peer_by_address(connection_id);
 
-        // Validator status is now determined via validator proof protocol
+        // Validator status is determined via validator proof protocol
         let is_validator = false;
 
         PeerType::new(is_persistent, is_validator)

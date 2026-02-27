@@ -46,6 +46,147 @@ pub struct ValidatorProof<Ctx: Context> {
 
 See `test/src/codec/` for example serialization implementations (JSON, Protobuf).
 
+## Architecture
+
+The validator proof protocol spans three tokio tasks that communicate via channels.
+
+### Tasks
+
+**1. Network Task** (`network::spawn` → `run()` in `lib.rs`)
+
+The main event loop that drives the libp2p swarm. Contains the `validator_proof::Behaviour`
+as one of the swarm's registered behaviours. The swarm polls all behaviours (gossipsub,
+identify, ping, validator_proof, etc.) on each iteration via `swarm.select_next_some()`.
+
+Inside the behaviour:
+- `on_swarm_event(ConnectionEstablished)` triggers sending our proof to the new peer
+- `poll()` reads results from the internal `events_rx` channel and emits them as swarm events
+
+The run loop also processes `CtrlMsg::ValidatorProofVerified` from the engine,
+calling `state.record_verified_proof()` to update peer type and GossipSub score.
+
+**2. Listener Task** (spawned once on first listen address by `start_listening()`)
+
+A long-running tokio task that calls `handle_incoming_streams()` in a loop, accepting
+incoming proof streams from any connected peer. Each stream is handled in a separate
+spawned sub-task (`recv_proof()`). Results are sent to the behaviour via `events_tx`.
+
+**3. Send Tasks** (spawned per peer by `send_proof()`)
+
+Short-lived tokio tasks that open a stream to a specific peer, write the proof, and close.
+Results (success or failure) are sent to the behaviour via `events_tx`.
+
+### Data Flow
+
+```
+  Listener Task                Send Tasks
+  (runs forever)               (per peer)
+       │                           │
+       │ ProofReceived             │ ProofSent / ProofSendFailed
+       ▼                           ▼
+  ┌─────────────────────────────────────────┐
+  │  events_tx/rx (unbounded mpsc)          │
+  └────────────────────┬────────────────────┘
+                       │
+                       ▼
+  ┌─────────────────────────────────────────┐
+  │  validator_proof::Behaviour::poll()     │
+  │  (called by swarm on each iteration)    │
+  │                                         │
+  │  Anti-spam checks, then emits           │
+  │  ToSwarm::GenerateEvent                 │
+  └────────────────────┬────────────────────┘
+                       │
+                       ▼
+  ┌─────────────────────────────────────────┐
+  │  Network run() loop                     │
+  │  handle_validator_proof_event()         │
+  │                                         │
+  │  Forwards ProofReceived via tx_event    │
+  └────────────────────┬────────────────────┘
+                       │
+                tx_event (network → engine)
+                       │
+                       ▼
+  ┌─────────────────────────────────────────┐
+  │  Engine Network Actor                   │
+  │  (engine/network.rs)                    │
+  │                                         │
+  │  Decode proof, check peer_id,           │
+  │  forward to consensus actor             │
+  └────────────────────┬────────────────────┘
+                       │
+              NetworkEvent (actor message)
+                       │
+                       ▼
+  ┌─────────────────────────────────────────┐
+  │  Engine Consensus Actor                 │
+  │  (engine/consensus.rs)                  │
+  │                                         │
+  │  Verify signature                       │
+  │  Send result back to network actor      │
+  └────────────────────┬────────────────────┘
+                       │
+              NetworkMsg (actor message)
+                       │
+                       ▼
+  ┌─────────────────────────────────────────┐
+  │  Engine Network Actor                   │
+  │                                         │
+  │  ctrl_handle.validator_proof_verified() │
+  └────────────────────┬────────────────────┘
+                       │
+                tx_ctrl (engine → network)
+                       │
+                       ▼
+  ┌─────────────────────────────────────────┐
+  │  Network run() loop                     │
+  │  CtrlMsg::ValidatorProofVerified        │
+  │                                         │
+  │  Invalid  → disconnect peer             │
+  │  Verified → record_verified_proof()     │
+  │             (update peer_type, score)   │
+  └─────────────────────────────────────────┘
+```
+
+### State
+
+The validator proof state is split between two locations:
+
+**`validator_proof::Behaviour`** (`behaviour.rs`) — connection-scoped session state:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `proof_bytes` | `Option<Bytes>` | Our proof to send (set when we're a validator, cleared when not) |
+| `connections` | `HashMap<PeerId, HashSet<ConnectionId>>` | Track active connections per peer (send on first, clean up on last) |
+| `proofs_sent` | `HashSet<PeerId>` | Peers we've sent to (dedup outgoing, cleared on disconnect) |
+| `proofs_received` | `HashSet<PeerId>` | Peers we've received from (anti-spam, cleared on disconnect) |
+| `listening` | `bool` | Whether the listener task has been spawned |
+
+All session state is cleared when the last connection to a peer closes, allowing fresh
+exchange on reconnect.
+
+**`State`** (`state.rs`) — persistent peer classification state:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `PeerInfo::consensus_public_key` | `Option<Vec<u8>>` | Stored public key from a verified proof. Used to re-evaluate validator status on validator set changes without needing a new proof. |
+| `PeerInfo::consensus_address` | `Option<String>` | Derived address (set if public key matches a validator in the set, cleared if not). Used for display/metrics. |
+| `PeerInfo::peer_type` | `PeerType` | Updated to `Validator` when proof is verified and key is in set. Updated on every validator set change via `reclassify_peers()`. |
+| `pending_verified_proofs` | `HashMap<PeerId, Vec<u8>>` | Buffer for proofs verified before Identify completes (proof and Identify arrive in either order). Applied when `update_peer()` creates the `PeerInfo`. |
+
+The split is because the **behaviour** handles the protocol mechanics
+(when to send, what we've seen, anti-spam), while the **network state** handles the
+durable classification (has this peer's proof been verified? are they in the validator set? what's their score?).
+
+### Channels
+
+| Channel | Direction | Type | Purpose |
+|---------|-----------|------|---------|
+| `events_tx/rx` | Send/Listener tasks → Behaviour | `mpsc::unbounded` | Internal: proof protocol results to behaviour's `poll()` |
+| `tx_event` | Network task → Engine | `mpsc::channel(32)` | Network events (including `ValidatorProofReceived`) |
+| `tx_ctrl` | Engine → Network task | `mpsc::channel(32)` | Control messages (including `ValidatorProofVerified`) |
+
 ## Protocol Flow
 
 ### Sending Proof
@@ -102,7 +243,7 @@ See `test/src/codec/` for example serialization implementations (JSON, Protobuf)
                                   ▼
   behaviour.rs
   ┌──────────────────────────────────────────────────────────────────────────┐
-  │ poll() - process protocol events                                         │
+  │ poll() - process protocol events (called from swarm.select_next_some())  │
   │   └─ ProofReceiveFailed → ToSwarm::CloseConnection (DISCONNECT)          │
   │   └─ ProofSendFailed → remove from proofs_sent (allow retry)             │
   │   └─ ProofReceived:                                                      │
