@@ -216,18 +216,21 @@ durable classification (has this peer's proof been verified? are they in the val
 
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         ON BECOMING VALIDATOR                               │
+│                         PROOF LIFECYCLE                                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-  network/lib.rs (UpdateValidatorSet handler)
+  network/lib.rs (startup)
   ┌──────────────────────────────────────────────────────────────────────────┐
-  │ if is_validator:                                                         │
-  │   ├─ behaviour.set_proof(proof_bytes)                                    │
-  │   └─ for each peer: behaviour.send_proof(peer_id)                        │
-  │       └─ (behaviour handles dedup via proofs_sent)                       │
-  │ else if was_validator:                                                   │
-  │   └─ behaviour.clear_proof()                                             │
+  │ behaviour.set_proof(proof_bytes)  — once at startup                      │
+  │                                                                          │
+  │ On every new connection (ConnectionEstablished):                          │
+  │   └─ behaviour.send_proof(peer_id)                                       │
+  │       └─ (dedup via proofs_sent set)                                     │
   └──────────────────────────────────────────────────────────────────────────┘
+
+  The proof is a static binding of (public_key, peer_id) and does not change
+  with validator set membership. Whether the receiver classifies the sender
+  as a validator depends on the receiver's own validator set.
 ```
 
 ### Receiving Proof
@@ -449,8 +452,8 @@ proof, which is the exact attack this protocol prevents.
 
 - The protocol is enabled when `config.enable_consensus = true`
 - Sync-only nodes do not enable the protocol
-- Proof is only sent when we have `proof_bytes` set (i.e., we're a validator)
-- When leaving the validator set, `clear_proof()` is called to stop sending proofs to new connections
+- The proof is set once at startup and sent to every new peer on `ConnectionEstablished`
+- The proof is a static binding; validator set membership is evaluated by the receiver
 - When the validator set changes, all peers with stored proofs are re-evaluated (`reclassify_peers`).
   Peers whose public key is no longer in the set are demoted (peer type and GossipSub score updated).
 

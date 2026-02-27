@@ -332,37 +332,39 @@ pub async fn spawn(
     config: Config,
     registry: SharedRegistry,
 ) -> Result<Handle, eyre::Report> {
-    let swarm = registry.with_prefix(METRICS_PREFIX, |registry| -> Result<_, eyre::Report> {
-        // Pass the libp2p keypair to the behaviour, it is included in the Identify protocol
-        // Required for ALL nodes
-        let builder = SwarmBuilder::with_existing_identity(identity.keypair.clone()).with_tokio();
-        match config.transport {
-            TransportProtocol::Tcp => {
-                let behaviour = Behaviour::new_with_metrics(&config, &identity, registry)?;
-                Ok(builder
-                    .with_tcp(
-                        libp2p::tcp::Config::new().nodelay(true), // Disable Nagle's algorithm
-                        libp2p::noise::Config::new,
-                        libp2p::yamux::Config::default,
-                    )?
-                    .with_dns()?
-                    .with_bandwidth_metrics(registry)
-                    .with_behaviour(|_| behaviour)?
-                    .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
-                    .build())
+    let mut swarm =
+        registry.with_prefix(METRICS_PREFIX, |registry| -> Result<_, eyre::Report> {
+            // Pass the libp2p keypair to the behaviour, it is included in the Identify protocol
+            // Required for ALL nodes
+            let builder =
+                SwarmBuilder::with_existing_identity(identity.keypair.clone()).with_tokio();
+            match config.transport {
+                TransportProtocol::Tcp => {
+                    let behaviour = Behaviour::new_with_metrics(&config, &identity, registry)?;
+                    Ok(builder
+                        .with_tcp(
+                            libp2p::tcp::Config::new().nodelay(true), // Disable Nagle's algorithm
+                            libp2p::noise::Config::new,
+                            libp2p::yamux::Config::default,
+                        )?
+                        .with_dns()?
+                        .with_bandwidth_metrics(registry)
+                        .with_behaviour(|_| behaviour)?
+                        .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
+                        .build())
+                }
+                TransportProtocol::Quic => {
+                    let behaviour = Behaviour::new_with_metrics(&config, &identity, registry)?;
+                    Ok(builder
+                        .with_quic_config(|cfg| config.apply_to_quic(cfg))
+                        .with_dns()?
+                        .with_bandwidth_metrics(registry)
+                        .with_behaviour(|_| behaviour)?
+                        .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
+                        .build())
+                }
             }
-            TransportProtocol::Quic => {
-                let behaviour = Behaviour::new_with_metrics(&config, &identity, registry)?;
-                Ok(builder
-                    .with_quic_config(|cfg| config.apply_to_quic(cfg))
-                    .with_dns()?
-                    .with_bandwidth_metrics(registry)
-                    .with_behaviour(|_| behaviour)?
-                    .with_swarm_config(|cfg| config.apply_to_swarm(cfg))
-                    .build())
-            }
-        }
-    })?;
+        })?;
 
     let metrics = registry.with_prefix(METRICS_PREFIX, Metrics::new);
 
@@ -393,6 +395,13 @@ pub async fn spawn(
 
     let consensus_address = validator.as_ref().map(|v| v.address.clone());
     let proof_bytes = validator.as_ref().and_then(|v| v.proof_bytes.clone());
+
+    // Set proof on the validator_proof behaviour so it is sent on every new connection
+    if let Some(ref proof_bytes) = proof_bytes {
+        if let Some(vp) = swarm.behaviour_mut().validator_proof.as_mut() {
+            vp.set_proof(proof_bytes.clone());
+        }
+    }
 
     // Create local node info
     let local_node_info = LocalNodeInfo {
@@ -624,23 +633,6 @@ async fn handle_ctrl_msg(
             // Update GossipSub scores for peers whose type changed
             for (peer_id, new_score) in changed_peers {
                 set_peer_score(swarm, peer_id, new_score);
-            }
-
-            // Update validator proof behaviour based on validator status
-            if let Some(validator_proof) = swarm.behaviour_mut().validator_proof.as_mut() {
-                if state.local_node.is_validator {
-                    // Set proof if we're a validator
-                    if let Some(proof_bytes) = &state.local_node.proof_bytes {
-                        validator_proof.set_proof(proof_bytes.clone());
-                    }
-                    // Send to all identified peers (behaviour handles dedup via proofs_sent)
-                    for &peer_id in state.peer_info.keys() {
-                        validator_proof.send_proof(peer_id);
-                    }
-                } else {
-                    // Clear proof if not a validator (no-op if already cleared)
-                    validator_proof.clear_proof();
-                }
             }
 
             ControlFlow::Continue(())

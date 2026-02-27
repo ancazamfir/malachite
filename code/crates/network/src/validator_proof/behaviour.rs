@@ -95,13 +95,10 @@ impl Behaviour {
     }
 
     /// Set the proof bytes to send when connecting to peers.
+    /// Called once at startup; the proof is a static binding of (public_key, peer_id)
+    /// and does not change with validator set membership.
     pub fn set_proof(&mut self, proof_bytes: Bytes) {
         self.proof_bytes = Some(proof_bytes);
-    }
-
-    /// Clear the proof (when we're no longer a validator).
-    pub fn clear_proof(&mut self) {
-        self.proof_bytes = None;
     }
 
     /// Check if we have a proof to send.
@@ -299,8 +296,8 @@ impl NetworkBehaviour for Behaviour {
             }
         }
 
-        // Poll the inner behaviour (stream::Behaviour does not emit events,
-        // but polling it is required to drive its internal state machine)
+        // Poll the inner behaviour
+        // Note:stream::Behaviour does not emit events, but polling it is required to drive its internal state machine
         let _ = self.inner.poll(cx);
 
         Poll::Pending

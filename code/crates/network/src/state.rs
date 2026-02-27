@@ -348,7 +348,7 @@ impl State {
     /// Determine the peer type based on peer ID and connection info.
     ///
     /// Validator status is determined exclusively via the validator proof protocol.
-    /// The agent_version field is NOT used for classification to prevent spoofing.
+    /// The agent_version field is not used for classification to prevent spoofing.
     pub(crate) fn peer_type(
         &self,
         peer_id: &libp2p::PeerId,
@@ -357,7 +357,6 @@ impl State {
         let is_persistent = self.persistent_peer_ids.contains(peer_id)
             || self.is_persistent_peer_by_address(connection_id);
 
-        // Validator status is determined via validator proof protocol
         let is_validator = false;
 
         PeerType::new(is_persistent, is_validator)

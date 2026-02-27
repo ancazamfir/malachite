@@ -14,29 +14,25 @@
 //!
 //! ## Sending Proof
 //!
-//! Proofs are sent in two scenarios:
+//! The proof is set once at startup and sent automatically on every new connection:
 //!
-//! ### 1. On Connection Established (automatic)
 //! ```text
-//! ConnectionEstablished event
-//!   └─► behaviour.on_connection_established()
-//!       └─► behaviour.send_proof(peer_id)
-//!           - Checks: has proof_bytes? first connection? not already sent?
-//!           └─► protocol::send_proof() spawned as task
-//!               └─► Opens stream, writes proof, closes
+//! Startup:
+//!   └─► behaviour.set_proof(proof_bytes)  — once
+//!
+//! ConnectionEstablished event:
+//!   └─► behaviour.send_proof(peer_id)
+//!       - Checks: has proof_bytes? first connection? not already sent?
+//!       └─► protocol::send_proof() spawned as task
+//!           └─► Opens stream, writes proof, closes
 //! ```
 //!
-//! ### 2. On Validator Set Update (to existing peers)
-//! ```text
-//! CtrlMsg::UpdateValidatorSet
-//!   └─► network/lib.rs: if is_validator
-//!       └─► behaviour.set_proof(proof_bytes)
-//!       └─► for each peer: behaviour.send_proof(peer_id)
-//!           └─ (behaviour handles dedup via proofs_sent)
-//! ```
+//! The proof is a static binding of (public_key, peer_id) and does not change
+//! with validator set membership. Whether the receiver classifies us as a
+//! validator depends on their own validator set.
 //!
 //! ### Sending Guards (in `validator_proof/behaviour.rs`)
-//! - `proof_bytes` must be set (only set when `is_validator == true`)
+//! - `proof_bytes` must be set (set once at startup)
 //! - `proofs_sent` tracks peers we've sent to (prevents duplicates)
 //! - `connections` tracks first vs additional connections (send only on first)
 //!
