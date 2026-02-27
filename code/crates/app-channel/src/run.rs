@@ -41,6 +41,11 @@ impl EngineHandle {
 ///
 /// # Example
 /// ```rust,ignore
+/// // Sign the validator proof (ADR-006) and build the network identity
+/// let proof = signer.sign_validator_proof(public_key_bytes, peer_id_bytes).await?;
+/// let proof_bytes = net_codec.encode(&proof)?;
+/// let identity = NetworkIdentity::new_validator(moniker, keypair, address, proof_bytes);
+///
 /// let (channels, handle) = start_engine(
 ///     ctx,
 ///     config,

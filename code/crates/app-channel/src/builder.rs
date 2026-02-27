@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eyre::{eyre, Result};
+use eyre::Result;
 use tokio::sync::mpsc::{self, Sender};
 
 use malachitebft_app::types::codec::HasEncodedLen;
@@ -160,11 +160,16 @@ pub enum RequestBuilder {
 ///
 /// # Example: All defaults
 /// ```rust,ignore
+/// // Sign the validator proof (ADR-006) and build the network identity
+/// let proof = signer.sign_validator_proof(public_key_bytes, peer_id_bytes).await?;
+/// let proof_bytes = codec.encode(&proof)?;
+/// let identity = NetworkIdentity::new_validator(moniker, keypair, address, proof_bytes);
+///
 /// let (channels, handle) = EngineBuilder::new(ctx, config)
 ///     .with_default_wal(WalContext::new(path, codec))
-///     .with_default_network(NetworkContext::new(moniker, keypair, codec))
+///     .with_default_network(NetworkContext::new(identity, codec))
 ///     .with_default_sync(SyncContext::new(sync_codec))
-///     .with_default_consensus(ConsensusContext::new(address, public_key_bytes, signer))
+///     .with_default_consensus(ConsensusContext::new(address, signer))
 ///     .with_default_request(RequestContext::new(100))
 ///     .build()
 ///     .await?;
@@ -178,7 +183,7 @@ pub enum RequestBuilder {
 ///     .with_default_wal(WalContext::new(path, codec))
 ///     .with_custom_network(network_ref, tx_network)
 ///     .with_default_sync(SyncContext::new(sync_codec))
-///     .with_default_consensus(ConsensusContext::new(address, public_key_bytes, signer))
+///     .with_default_consensus(ConsensusContext::new(address, signer))
 ///     .with_default_request(RequestContext::new(100))
 ///     .build()
 ///     .await?;
@@ -735,10 +740,6 @@ where
         let wal_builder = self.wal.unwrap();
         let network_builder = self.network.unwrap();
         let sync_builder = self.sync.unwrap();
-
-        if self.config.value_sync().enabled && self.config.value_sync().batch_size == 0 {
-            return Err(eyre!("Value sync batch size cannot be zero"));
-        }
 
         // Set up metrics
         let registry = SharedRegistry::global().with_moniker(self.config.moniker());
