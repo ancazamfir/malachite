@@ -16,6 +16,7 @@ use crate::{Channels, EngineBuilder};
 
 pub use crate::app::types::Keypair;
 pub use malachitebft_engine::network::NetworkIdentity;
+pub use malachitebft_signing::SigningProviderExt;
 
 pub use crate::builder::{
     ConsensusContext, NetworkContext, RequestContext, SyncContext, WalContext,
@@ -44,8 +45,8 @@ impl EngineHandle {
 ///     ctx,
 ///     config,
 ///     WalContext::new(path, wal_codec),
-///     NetworkContext::new(moniker, keypair, net_codec),
-///     ConsensusContext::new(address, public_key_bytes, signer),
+///     NetworkContext::new(identity, net_codec),
+///     ConsensusContext::new(address, signer),
 ///     SyncContext::new(sync_codec),
 ///     RequestContext::new(100),
 /// ).await?;

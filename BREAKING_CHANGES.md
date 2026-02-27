@@ -53,13 +53,10 @@
 ### `malachitebft-app-channel`
 
 - Changed `NetworkContext` struct for Proof-of-Validator support (ADR-006):
-  - Replaced `identity: NetworkIdentity` with `moniker: String` and `keypair: Keypair`
-  - Old: `NetworkContext::new(identity: NetworkIdentity, codec: Codec)`
-  - New: `NetworkContext::new(moniker: String, keypair: Keypair, codec: Codec)`
-- Added `public_key_bytes: Vec<u8>` field to `ConsensusContext` struct (ADR-006)
-  - Old: `ConsensusContext::new(address, signing_provider)`
-  - New: `ConsensusContext::new(address, public_key_bytes, signing_provider)`
-- Re-exported `Keypair` type from `malachitebft_app_channel::run`
+  - Old: `NetworkContext::new(identity: NetworkIdentity, codec: Codec)` (where `NetworkIdentity` had no proof)
+  - New: `NetworkContext::new(identity: NetworkIdentity, codec: Codec)` (where `NetworkIdentity` carries pre-signed proof bytes)
+  - The application is now responsible for signing the validator proof and building `NetworkIdentity::new_validator(moniker, keypair, address, proof_bytes)` before passing it to `NetworkContext`
+- Re-exported `SigningProviderExt` from `malachitebft_app_channel` (needed by apps to call `sign_validator_proof`)
 - Network codec now requires `Codec<ValidatorProof<Ctx>>` implementation
 - Changed `AppMsg::ConsensusReady` reply type from `(Ctx::Height, Ctx::ValidatorSet)` to `(Ctx::Height, HeightParams<Ctx>)` ([#1227](https://github.com/circlefin/malachite/pull/1227))
 - Changed `ConsensusMsg::StartHeight` from `StartHeight(Height, ValidatorSet)` to `StartHeight(Height, HeightParams)` ([#1227](https://github.com/circlefin/malachite/pull/1227))

@@ -16,7 +16,7 @@ use malachitebft_engine::sync::SyncRef;
 use malachitebft_engine::util::events::TxEvent;
 use malachitebft_engine::util::output_port::{OutputPort, OutputPortSubscriberTrait};
 use malachitebft_engine::wal::WalRef;
-use malachitebft_signing::{SigningProvider, SigningProviderExt};
+use malachitebft_signing::SigningProvider;
 
 use crate::app::config::NodeConfig;
 use crate::app::metrics::{Metrics, SharedRegistry};
@@ -25,7 +25,6 @@ use crate::app::spawn::{
 };
 use crate::app::types::codec;
 use crate::app::types::core::Context;
-use crate::app::types::Keypair;
 use crate::msgs::NetworkMsg;
 use crate::spawn::{spawn_host_actor, spawn_network_actor};
 use crate::{Channels, EngineHandle};
@@ -62,35 +61,28 @@ impl<Codec> WalContext<Codec> {
     }
 }
 
-/// Context for spawning the Network actor (Proof-of-Validator / ADR-006).
+/// Context for spawning the Network actor.
 pub struct NetworkContext<Codec> {
-    pub moniker: String,
-    pub keypair: Keypair,
+    pub identity: NetworkIdentity,
     pub codec: Codec,
 }
 
 impl<Codec> NetworkContext<Codec> {
-    pub fn new(moniker: String, keypair: Keypair, codec: Codec) -> Self {
-        Self {
-            moniker,
-            keypair,
-            codec,
-        }
+    pub fn new(identity: NetworkIdentity, codec: Codec) -> Self {
+        Self { identity, codec }
     }
 }
 
-/// Context for spawning the Consensus actor (Proof-of-Validator / ADR-006).
+/// Context for spawning the Consensus actor.
 pub struct ConsensusContext<Ctx: Context, Signer> {
     pub address: Ctx::Address,
-    pub public_key_bytes: Vec<u8>,
     pub signing_provider: Signer,
 }
 
 impl<Ctx: Context, Signer> ConsensusContext<Ctx, Signer> {
-    pub fn new(address: Ctx::Address, public_key_bytes: Vec<u8>, signing_provider: Signer) -> Self {
+    pub fn new(address: Ctx::Address, signing_provider: Signer) -> Self {
         Self {
             address,
-            public_key_bytes,
             signing_provider,
         }
     }
@@ -756,25 +748,8 @@ where
         let (network, tx_network) = match network_builder {
             NetworkBuilder::Custom(custom) => custom,
             NetworkBuilder::Default(network_ctx) => {
-                // Proof-of-Validator (ADR-006): create and sign validator certificate
-                let peer_id_bytes = network_ctx.keypair.public().to_peer_id().to_bytes();
-                let certificate = consensus_ctx
-                    .signing_provider
-                    .sign_validator_proof(consensus_ctx.public_key_bytes.clone(), peer_id_bytes)
-                    .await
-                    .map_err(|e| eyre!("Failed to sign validator certificate: {e:?}"))?;
-                let proof_bytes = network_ctx
-                    .codec
-                    .encode(&certificate)
-                    .map_err(|e| eyre!("Failed to encode validator certificate: {e:?}"))?;
-                let identity = NetworkIdentity::new_validator(
-                    network_ctx.moniker,
-                    network_ctx.keypair,
-                    consensus_ctx.address.to_string(),
-                    proof_bytes,
-                );
                 spawn_network_actor(
-                    identity,
+                    network_ctx.identity,
                     self.config.consensus(),
                     self.config.value_sync(),
                     &registry,
@@ -911,13 +886,9 @@ mod tests {
 
         let _ = EngineBuilder::new(ctx, Config)
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
-            .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
+            .with_default_network(NetworkContext::new(fake(), JsonCodec))
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -932,11 +903,7 @@ mod tests {
             .with_custom_wal(fake())
             .with_custom_network(fake(), fake())
             .with_custom_sync(fake())
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -949,13 +916,9 @@ mod tests {
 
         let _ = EngineBuilder::new(ctx, Config)
             .with_custom_wal(fake())
-            .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
+            .with_default_network(NetworkContext::new(fake(), JsonCodec))
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -970,11 +933,7 @@ mod tests {
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_custom_network(fake(), fake())
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -987,13 +946,9 @@ mod tests {
 
         let _ = EngineBuilder::new(ctx, Config)
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
-            .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
+            .with_default_network(NetworkContext::new(fake(), JsonCodec))
             .with_custom_sync(fake())
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -1006,13 +961,9 @@ mod tests {
 
         let _ = EngineBuilder::new(ctx, Config)
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
-            .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
+            .with_default_network(NetworkContext::new(fake(), JsonCodec))
             .with_no_sync()
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -1027,11 +978,7 @@ mod tests {
             .with_custom_wal(fake())
             .with_custom_network(fake(), fake())
             .with_default_sync(SyncContext::new(JsonCodec))
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -1046,11 +993,7 @@ mod tests {
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
             .with_custom_network(fake(), fake())
             .with_custom_sync(fake())
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .build()
             .await;
@@ -1062,14 +1005,10 @@ mod tests {
         let ctx = TestContext::default();
 
         let _ = EngineBuilder::new(ctx, Config)
-            .with_default_consensus(ConsensusContext::new(
-                fake(),
-                fake(),
-                fake::<Ed25519Provider>(),
-            ))
+            .with_default_consensus(ConsensusContext::new(fake(), fake::<Ed25519Provider>()))
             .with_default_request(RequestContext::new(100))
             .with_default_wal(WalContext::new(fake(), ProtobufCodec))
-            .with_default_network(NetworkContext::new(fake(), fake(), JsonCodec))
+            .with_default_network(NetworkContext::new(fake(), JsonCodec))
             .with_default_sync(SyncContext::new(JsonCodec))
             .build()
             .await;
