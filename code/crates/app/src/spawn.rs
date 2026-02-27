@@ -255,6 +255,8 @@ fn make_network_config(cfg: &ConsensusConfig, value_sync_cfg: &ValueSyncConfig) 
                 mesh_n_low: config.mesh_n_low(),
                 mesh_outbound_min: config.mesh_outbound_min(),
                 enable_peer_scoring: config.enable_peer_scoring(),
+                enable_explicit_peering: config.enable_explicit_peering(),
+                enable_flood_publish: config.enable_flood_publish(),
             },
             config::PubSubProtocol::Broadcast => GossipSubConfig::default(),
         },
@@ -269,7 +271,6 @@ fn make_network_config(cfg: &ConsensusConfig, value_sync_cfg: &ValueSyncConfig) 
             discovery_regres: cfg.p2p.protocol_names.discovery_regres.clone(),
             sync: cfg.p2p.protocol_names.sync.clone(),
             validator_proof: cfg.p2p.protocol_names.validator_proof.clone(),
-            broadcast: cfg.p2p.protocol_names.broadcast.clone(),
         },
     }
 }

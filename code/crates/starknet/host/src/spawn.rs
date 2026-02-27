@@ -280,6 +280,8 @@ async fn spawn_network_actor(
                 mesh_n_low: config.mesh_n_low(),
                 mesh_outbound_min: config.mesh_outbound_min(),
                 enable_peer_scoring: config.enable_peer_scoring(),
+                enable_explicit_peering: config.enable_explicit_peering(),
+                enable_flood_publish: config.enable_flood_publish(),
             },
             config::PubSubProtocol::Broadcast => gossip::GossipSubConfig::default(),
         },
@@ -294,7 +296,6 @@ async fn spawn_network_actor(
             discovery_regres: cfg.consensus.p2p.protocol_names.discovery_regres.clone(),
             sync: cfg.consensus.p2p.protocol_names.sync.clone(),
             validator_proof: cfg.consensus.p2p.protocol_names.validator_proof.clone(),
-            broadcast: cfg.consensus.p2p.protocol_names.broadcast.clone(),
         },
     };
 
