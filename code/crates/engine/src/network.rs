@@ -482,11 +482,7 @@ where
                 let proof: ValidatorProof<Ctx> = match self.codec.decode(proof_bytes) {
                     Ok(p) => p,
                     Err(e) => {
-                        error!(%peer_id, "Failed to decode validator proof: {e:?}");
-                        // Send invalid signature result - peer will be disconnected
-                        ctrl_handle
-                            .validator_proof_verified(peer_id, VerificationResult::Invalid, None)
-                            .await?;
+                        warn!(%peer_id, "Failed to decode validator proof: {e:?}, ignoring");
                         return Ok(());
                     }
                 };

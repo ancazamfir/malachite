@@ -46,110 +46,7 @@ pub struct ValidatorProof<Ctx: Context> {
 
 See `test/src/codec/` for example serialization implementations (JSON, Protobuf).
 
-## Architecture
-
-The validator proof protocol spans three tokio tasks that communicate via channels.
-
-### Tasks
-
-**1. Network Task** (`network::spawn` → `run()` in `lib.rs`)
-
-The main event loop that drives the libp2p swarm. Contains the `validator_proof::Behaviour`
-as one of the swarm's registered behaviours. The swarm polls all behaviours (gossipsub,
-identify, ping, validator_proof, etc.) on each iteration via `swarm.select_next_some()`.
-
-Inside the behaviour:
-- `on_swarm_event(ConnectionEstablished)` triggers sending our proof to the new peer
-- `poll()` reads results from the internal `events_rx` channel and emits them as swarm events
-
-The run loop also processes `CtrlMsg::ValidatorProofVerified` from the engine,
-calling `state.record_verified_proof()` to update peer type and GossipSub score.
-
-**2. Listener Task** (spawned once on first listen address by `start_listening()`)
-
-A long-running tokio task that calls `handle_incoming_streams()` in a loop, accepting
-incoming proof streams from any connected peer. Each stream is handled in a separate
-spawned sub-task (`recv_proof()`). Results are sent to the behaviour via `events_tx`.
-
-**3. Send Tasks** (spawned per peer by `send_proof()`)
-
-Short-lived tokio tasks that open a stream to a specific peer, write the proof, and close.
-Results (success or failure) are sent to the behaviour via `events_tx`.
-
-### Data Flow
-
-```
-  Listener Task                Send Tasks
-  (runs forever)               (per peer)
-       │                           │
-       │ ProofReceived             │ ProofSent / ProofSendFailed
-       ▼                           ▼
-  ┌─────────────────────────────────────────┐
-  │  events_tx/rx (unbounded mpsc)          │
-  └────────────────────┬────────────────────┘
-                       │
-                       ▼
-  ┌─────────────────────────────────────────┐
-  │  validator_proof::Behaviour::poll()     │
-  │  (called by swarm on each iteration)    │
-  │                                         │
-  │  Anti-spam checks, then emits           │
-  │  ToSwarm::GenerateEvent                 │
-  └────────────────────┬────────────────────┘
-                       │
-                       ▼
-  ┌─────────────────────────────────────────┐
-  │  Network run() loop                     │
-  │  handle_validator_proof_event()         │
-  │                                         │
-  │  Forwards ProofReceived via tx_event    │
-  └────────────────────┬────────────────────┘
-                       │
-                tx_event (network → engine)
-                       │
-                       ▼
-  ┌─────────────────────────────────────────┐
-  │  Engine Network Actor                   │
-  │  (engine/network.rs)                    │
-  │                                         │
-  │  Decode proof, check peer_id,           │
-  │  forward to consensus actor             │
-  └────────────────────┬────────────────────┘
-                       │
-              NetworkEvent (actor message)
-                       │
-                       ▼
-  ┌─────────────────────────────────────────┐
-  │  Engine Consensus Actor                 │
-  │  (engine/consensus.rs)                  │
-  │                                         │
-  │  Verify signature                       │
-  │  Send result back to network actor      │
-  └────────────────────┬────────────────────┘
-                       │
-              NetworkMsg (actor message)
-                       │
-                       ▼
-  ┌─────────────────────────────────────────┐
-  │  Engine Network Actor                   │
-  │                                         │
-  │  ctrl_handle.validator_proof_verified() │
-  └────────────────────┬────────────────────┘
-                       │
-                tx_ctrl (engine → network)
-                       │
-                       ▼
-  ┌─────────────────────────────────────────┐
-  │  Network run() loop                     │
-  │  CtrlMsg::ValidatorProofVerified        │
-  │                                         │
-  │  Invalid  → disconnect peer             │
-  │  Verified → record_verified_proof()     │
-  │             (update peer_type, score)   │
-  └─────────────────────────────────────────┘
-```
-
-### State
+## Validator Proof Related State
 
 The validator proof state is split between two locations:
 
@@ -269,7 +166,7 @@ durable classification (has this peer's proof been verified? are they in the val
   ┌──────────────────────────────────────────────────────────────────────────┐
   │ Msg::NewEvent(Event::ValidatorProofReceived)                             │
   │   ├─ Check: decode success? (codec.decode)                               │
-  │   │    └─ If fail → send Invalid result                                  │
+  │   │    └─ If fail → log warning, ignore (NO DISCONNECT)                  │
   │   ├─ Check: proof.peer_id == sender peer_id?                             │
   │   │    └─ If mismatch → send Invalid result                              │
   │   └─ Forward: NetworkEvent::ValidatorProofReceived{peer_id, proof}       │
@@ -304,13 +201,13 @@ durable classification (has this peer's proof been verified? are they in the val
 | Message size (1KB max) | codec.rs | Close stream |
 | Stream read failure | behaviour.rs | Disconnect |
 | Anti-spam (duplicate) | behaviour.rs | Disconnect |
-| Decode proof | engine/network.rs | Disconnect |
+| Decode proof | engine/network.rs | Log + ignore |
 | PeerId matches sender | engine/network.rs | Disconnect |
 | Signature valid | engine/consensus.rs | Disconnect |
 
 ### Checks that Must Stay in Engine
 
-- **Decode** (engine/network.rs): Engine has the codec
+- **Decode** (engine/network.rs): Engine has the codec. Failures are logged and ignored (peer stays connected).
 - **PeerId match** (engine/network.rs): Requires decoded proof
 - **Signature verification** (engine/consensus.rs): Needs signing provider
 
@@ -375,8 +272,8 @@ All cleared when last connection to peer closes, allowing fresh exchange on reco
          |<------- Validator Proof (invalid) ---------|
          |                                            |
          |  [A receives proof,                        |
-         |   verification fails (bad signature,       |
-         |   peer_id mismatch, or decode error)]      |
+         |   verification fails (bad signature        |
+         |   or peer_id mismatch)]                    |
          |                                            |
          |======== Disconnect ========================|
          |                                            |
@@ -397,6 +294,22 @@ All cleared when last connection to peer closes, allowing fresh exchange on reco
          |   peer already in proofs_received]         |
          |                                            |
          |======== Disconnect (anti-spam) ============|
+         |                                            |
+```
+
+### Scenario 5: Incompatible Codec Version - Graceful Ignore
+
+```
+    Node A (new version)                        Node B (old version)
+         |                                            |
+         |<------- Validator Proof (old codec) -------|
+         |                                            |
+         |  [A receives proof bytes,                  |
+         |   codec.decode() fails with                |
+         |   CodecError::UnsupportedVersion]          |
+         |                                            |
+         |  [A logs warning, ignores proof]           |
+         |  [B stays connected as full_node]          |
          |                                            |
 ```
 
@@ -444,9 +357,104 @@ This does **not** affect:
 2. Once all nodes are upgraded, the validator proof protocol takes effect and all validators
    are correctly classified.
 
-Falling back to `agent_version`-based classification was considered but rejected as insecure.
-A malicious peer can claim any validator's address in `agent_version` without cryptographic
-proof, which is the exact attack this protocol prevents.
+Falling back to `agent_version`-based classification was considered but rejected as it provides
+lower security guarantees. A malicious peer could claim any validator's address in `agent_version`
+without cryptographic proof, which is the exact attack this protocol prevents.
+
+## Version Compatibility
+
+The validator proof protocol has multiple versioned layers. This section explains what
+happens when nodes running different versions connect.
+
+### Protocol Layers and Their Versions
+
+| Layer | Component | Version indicator | Example |
+|-------|-----------|------------------|---------|
+| **Protocol name** | libp2p multistream-select | Protocol string in `StreamProtocol` | `/malachitebft-validator-proof/v1` |
+| **Wire codec** | `codec.rs` (unsigned-varint framing) | Implicit (framing format) | Length-delimited bytes |
+| **Application codec** | Engine-level `codec.decode()` | Application-defined (e.g., explicit version field) | Codec V1 vs V2 |
+| **Proof structure** | `ValidatorProof` fields | Defined by the application codec | Key length, signature scheme |
+
+### What Happens on Mismatch
+
+**1. Different protocol names** (e.g., `/malachitebft-validator-proof/v1` vs `/v2`)
+
+The libp2p multistream-select negotiation fails. The stream is never opened, so no proof
+is exchanged. The peer stays connected but is not classified as `validator`. No errors are
+logged at the validator proof level — the negotiation failure is handled entirely by libp2p.
+
+**2. Stream read failure** (e.g., oversized message, connection drop, corrupted bytes)
+
+The wire codec uses standard unsigned-varint length-delimited framing, which is a libp2p
+convention and will not change independently of a protocol name bump. A read failure here
+indicates misbehavior (e.g., sending >1KB), a transient network error, or a bug — not a
+version mismatch. The peer is **disconnected**.
+
+**3. Same protocol name, different application codec** (e.g., codec version bump, different serialization format)
+
+The wire codec successfully reads the bytes, but `engine/network.rs` fails to decode them
+(e.g., `CodecError::UnsupportedVersion`). The error is **logged and ignored** — the peer
+stays connected but is not classified as a validator.
+
+Note: Adding new protobuf fields is generally backwards compatible (unknown fields are
+ignored). This case applies when the codec has an explicit version check or when the
+serialization format itself changes.
+
+**4. Invalid signature**
+
+The proof decodes successfully, but signature verification fails in `engine/consensus.rs`.
+The peer is **disconnected**.
+
+This can be caused by a forged signature (malicious peer) or by a signing scheme mismatch
+during a rolling upgrade (e.g., one node uses ed25519, the other secp256k1). At the
+verification layer, these two cases are indistinguishable.
+
+To avoid disconnections during signing scheme changes, either use a different **protocol
+name** (e.g., `/malachitebft-validator-proof/v1` → `/v2`), which reduces the problem to
+case 1 (stream never opened), or a different **application codec version**, which reduces
+it to case 3 (decode fails, logged and ignored). Both keep the peer connected.
+
+### When to Change What
+
+| What changed | Required change | Why |
+|---|---|---|
+| **Signing scheme** (e.g., ed25519 → secp256k1) | Protocol name or codec version | Without it, signature verification fails → disconnect (indistinguishable from forgery). |
+| **Proof serialization** (e.g., new codec version) | Codec version | Decode failure is logged and ignored (case 3). |
+| **Adding fields not in sign_bytes** | None | Backwards compatible — old decoders ignore unknown fields, signature is unaffected. |
+| **Adding fields included in sign_bytes** | Protocol name or codec version | Old nodes reconstruct different sign_bytes → signature verification fails → disconnect. Either change is sufficient (case 1 or case 3). |
+
+**Protocol name vs codec version change:** Changing the protocol name means no proof
+exchange in either direction during a rolling upgrade. Changing only the codec version
+(keeping the protocol name) allows the new codec to read both old and new formats, giving
+one-directional verification (new nodes can verify old validators) during the upgrade window.
+
+### Summary of Failure Outcomes
+
+| Mismatch type | Stream opened? | Proof decoded? | Result |
+|---------------|---------------|---------------|--------|
+| Protocol name | No | No | Peer stays connected, classified as `full_node` |
+| Stream read failure | Yes | No (read error) | Disconnect (misbehavior or network error) |
+| Application codec | Yes | No (decode error) | Log + ignore, peer stays connected |
+| Invalid signature | Yes | Yes | Disconnect (forgery or signing scheme mismatch — use different protocol name or codec versions to avoid) |
+| Duplicate proof | Yes | Yes | Disconnect (anti-spam) |
+| PeerId mismatch | Yes | Yes | Disconnect (proof forgery) |
+
+### Design Rationale
+
+Application codec decode failures are treated as non-fatal because they commonly occur
+during rolling upgrades when nodes run different software versions. Disconnecting peers for
+version mismatches would cause unnecessary churn and could impact consensus liveness if
+enough validators are affected. When the new codec is backwards compatible (can read the
+old format), keeping the same protocol name allows new nodes to still verify old validators'
+proofs during the upgrade window.
+
+Stream read failures result in disconnection because the wire framing (unsigned-varint
+length-delimited) is a stable libp2p convention that does not change independently of
+a protocol name bump. A read failure indicates misbehavior, a network error, or a bug.
+
+Signature verification failures result in disconnection because a failed signature is
+indistinguishable from a forgery attempt. Signing scheme changes should be accompanied
+by a protocol name or codec version change to avoid this (see "When to Change What").
 
 ## Implementation Summary
 

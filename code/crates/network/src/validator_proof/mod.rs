@@ -57,7 +57,8 @@
 //! - Forwards proof to engine (anti-spam already handled by behaviour)
 //!
 //! ### 3. `engine/network.rs` (Engine Layer - Decoding)
-//! - **Decode**: Proof bytes must decode as valid `ValidatorProof` → DISCONNECT if not
+//! - **Decode**: Proof bytes must decode as valid `ValidatorProof` → logged and ignored if not
+//!   (see "Decode failures" below)
 //! - **PeerId match**: `proof.peer_id` must equal sender's peer_id → DISCONNECT if not
 //!   (prevents forwarding someone else's proof)
 //!
@@ -76,13 +77,18 @@
 //! - Retry allowed on next connection or trigger
 //!
 //! **Receive failures** (`ProofReceiveFailed`):
-//! - Cannot read stream (framing error) → behaviour emits `CloseConnection` → DISCONNECT
+//! - Cannot read stream (framing error, oversized message, connection drop)
+//!   → behaviour emits `CloseConnection` → DISCONNECT
 //!
 //! **Anti-spam** (behaviour level):
 //! - Duplicate proof from same peer → behaviour emits `CloseConnection` → DISCONNECT
 //! - Tracked via `proofs_received` set, cleared when last connection closes
 //!
-//! **Validation failures** (after decoding):
+//! **Decode failures** (application codec):
+//! - Proof bytes received but cannot be decoded (e.g., `CodecError::UnsupportedVersion`)
+//!   → logged and ignored (peer stays connected, just not classified as validator)
+//!
+//! **Validation failures** (after successful decoding):
 //! - PeerId mismatch → DISCONNECT
 //! - Invalid signature → DISCONNECT
 //! - `Invalid` result sent back to network layer for disconnect
