@@ -9,18 +9,21 @@ use eyre::Result;
 use malachitebft_engine::consensus::{ConsensusMsg, ConsensusRef};
 use malachitebft_engine::network::{NetworkMsg, NetworkRef};
 use malachitebft_engine::node::NodeRef;
+use malachitebft_signing::SigningProvider;
 
-use crate::app::types::core::Context;
-use crate::msgs::{ConsensusRequest, NetworkRequest};
-use crate::{Channels, EngineBuilder};
-
-pub use crate::app::types::Keypair;
 pub use malachitebft_engine::network::NetworkIdentity;
 pub use malachitebft_signing::SigningProviderExt;
 
+// Re-export context structs from builder module
 pub use crate::builder::{
     ConsensusContext, NetworkContext, RequestContext, SyncContext, WalContext,
 };
+
+use crate::app::config::NodeConfig;
+use crate::app::types::codec;
+use crate::app::types::core::Context;
+use crate::msgs::{ConsensusRequest, NetworkRequest};
+use crate::{Channels, EngineBuilder};
 
 pub struct EngineHandle {
     pub actor: NodeRef,
@@ -56,7 +59,6 @@ impl EngineHandle {
 ///     RequestContext::new(100),
 /// ).await?;
 /// ```
-#[allow(clippy::too_many_arguments)]
 pub async fn start_engine<Ctx, Config, Signer, WalCodec, NetCodec, SyncCodec>(
     ctx: Ctx,
     cfg: Config,
@@ -68,13 +70,11 @@ pub async fn start_engine<Ctx, Config, Signer, WalCodec, NetCodec, SyncCodec>(
 ) -> Result<(Channels<Ctx>, EngineHandle)>
 where
     Ctx: Context,
-    Config: crate::app::config::NodeConfig,
-    Signer: malachitebft_signing::SigningProvider<Ctx> + 'static,
-    WalCodec: crate::app::types::codec::WalCodec<Ctx> + Clone,
-    NetCodec: Clone
-        + crate::app::types::codec::ConsensusCodec<Ctx>
-        + crate::app::types::codec::SyncCodec<Ctx>,
-    SyncCodec: Clone + crate::app::types::codec::SyncCodec<Ctx>,
+    Config: NodeConfig,
+    Signer: SigningProvider<Ctx> + 'static,
+    WalCodec: codec::WalCodec<Ctx> + Clone,
+    NetCodec: Clone + codec::ConsensusCodec<Ctx> + codec::SyncCodec<Ctx>,
+    SyncCodec: Clone + codec::SyncCodec<Ctx>,
 {
     EngineBuilder::new(ctx, cfg)
         .with_default_wal(wal_ctx)
