@@ -347,21 +347,14 @@ impl State {
         }
     }
 
-    /// Determine the peer type based on peer ID and connection info.
-    ///
-    /// Validator status is determined exclusively via the validator proof protocol.
-    /// The agent_version field is not used for classification to prevent spoofing.
-    pub(crate) fn peer_type(
+    /// Check if a peer is persistent, by PeerId or by connection address.
+    fn is_persistent_peer(
         &self,
         peer_id: &libp2p::PeerId,
         connection_id: libp2p::swarm::ConnectionId,
-    ) -> PeerType {
-        let is_persistent = self.persistent_peer_ids.contains(peer_id)
-            || self.is_persistent_peer_by_address(connection_id);
-
-        let is_validator = false;
-
-        PeerType::new(is_persistent, is_validator)
+    ) -> bool {
+        self.persistent_peer_ids.contains(peer_id)
+            || self.is_persistent_peer_by_address(connection_id)
     }
 
     /// Check if a peer is a persistent peer by matching its addresses against persistent peer addresses
@@ -449,10 +442,8 @@ impl State {
         info: &identify::Info,
     ) -> f64 {
         // Determine peer type using actual remote address for inbound connections
-        let peer_type = self.peer_type(&peer_id, connection_id);
-
-        // Track persistent peers
-        if peer_type.is_persistent() {
+        let is_persistent = self.is_persistent_peer(&peer_id, connection_id);
+        if is_persistent {
             self.persistent_peer_ids.insert(peer_id);
         }
 
@@ -495,14 +486,18 @@ impl State {
                 existing.address = address;
                 existing.connection_direction = connection_direction;
             }
-            // Preserve: peer_type, consensus_public_key, consensus_address, score, topics
+            // Update persistent flag (may differ per connection, e.g. inbound ephemeral
+            // port vs outbound dialed address), but preserve validator status from proof protocol.
+            existing.peer_type = existing.peer_type.with_persistent(is_persistent);
+            existing.score = crate::peer_scoring::get_peer_score(existing.peer_type);
 
             self.metrics
                 .update_peer_labels(&peer_id, &old_peer_info, existing);
             return existing.score;
         }
 
-        // New peer - create entry
+        // New peer - create entry (validator status starts as false, set by proof protocol)
+        let peer_type = PeerType::new(is_persistent, false);
         let mut score = crate::peer_scoring::get_peer_score(peer_type);
         let peer_info = PeerInfo {
             address,

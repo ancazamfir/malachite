@@ -837,15 +837,15 @@ async fn handle_swarm_event(
                 .handle_closed_connection(swarm, peer_id, connection_id);
 
             if num_established == 0 {
+                // Remove explicit peer before removing peer_info (needs peer_info to exist)
+                if config.gossipsub.enable_explicit_peering {
+                    remove_explicit_peer_from_gossipsub(swarm, state, &peer_id);
+                }
                 if let Some(peer_info) = state.peer_info.remove(&peer_id) {
                     state.metrics.free_slot(&peer_id, &peer_info);
                 }
                 // Also clean up any pending proof (proof verified before Identify completed)
                 state.pending_verified_proofs.remove(&peer_id);
-                // Remove explicit peer from gossipsub and mark metric stale when this peer was one
-                if config.gossipsub.enable_explicit_peering {
-                    remove_explicit_peer_from_gossipsub(swarm, state, &peer_id);
-                }
 
                 if let Err(e) = tx_event
                     .send(Event::PeerDisconnected(PeerId::from_libp2p(&peer_id)))
