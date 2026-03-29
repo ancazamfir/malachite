@@ -2,8 +2,8 @@ use libp2p::{identify, swarm::ConnectionId, PeerId, Swarm};
 use tracing::{debug, info, warn};
 
 use crate::{
-    config::BootstrapProtocol, request::RequestData, util::strip_peer_id_from_multiaddr, Discovery,
-    DiscoveryClient, OutboundState, State,
+    config::BootstrapProtocol, request::RequestData, util::extract_ip, Discovery, DiscoveryClient,
+    OutboundState, State,
 };
 
 impl<C> Discovery<C>
@@ -90,16 +90,15 @@ where
                     .iter()
                     .any(|dial_addr| listen_addrs.contains(dial_addr))
             } else if let Some(remote_addr) = connection_remote_addr {
-                // Inbound connection, check actual TCP remote address.
-                // Strip /p2p/ component if present, since addresses may include a peer ID.
-                // Note: This only matches if peer uses port reuse (source port == listen port).
-                // With ephemeral source ports, peer gets identified as bootstrap when we
-                // later dial their configured listen address.
-                let remote_addr_stripped = strip_peer_id_from_multiaddr(remote_addr);
-                listen_addrs.iter().any(|bootstrap_addr| {
-                    let bootstrap_stripped = strip_peer_id_from_multiaddr(bootstrap_addr);
-                    remote_addr_stripped == bootstrap_stripped
-                })
+                // Inbound connection: match by IP only, ignoring port.
+                // Inbound connections use ephemeral source ports, so the remote address
+                // will be e.g. /ip4/172.21.1.0/tcp/54321 while the bootstrap address is
+                // /ip4/172.21.1.0/tcp/27000. Comparing the full address would never match.
+                let remote_ip = extract_ip(remote_addr);
+                remote_ip.is_some()
+                    && listen_addrs
+                        .iter()
+                        .any(|bootstrap_addr| extract_ip(bootstrap_addr) == remote_ip)
             } else {
                 // No connection info available, cannot verify
                 debug!(

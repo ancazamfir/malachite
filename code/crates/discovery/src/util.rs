@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::time::Duration;
 
 use libp2p::Multiaddr;
@@ -14,6 +15,21 @@ pub fn strip_peer_id_from_multiaddr(addr: &Multiaddr) -> Multiaddr {
         }
     }
     result
+}
+
+/// Extract the IP address from a Multiaddr, ignoring port and transport protocol.
+/// Returns None if the Multiaddr does not contain an IP component.
+pub fn extract_ip(addr: &Multiaddr) -> Option<IpAddr> {
+    use libp2p::multiaddr::Protocol;
+
+    for protocol in addr.iter() {
+        match protocol {
+            Protocol::Ip4(ip) => return Some(IpAddr::V4(ip)),
+            Protocol::Ip6(ip) => return Some(IpAddr::V6(ip)),
+            _ => {}
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
